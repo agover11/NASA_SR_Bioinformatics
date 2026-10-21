@@ -23,6 +23,7 @@ library(DESeq2)
 library(edgeR)
 library(limma)
 
+
 set.seed(42)
 setwd("/Users/lexigover/Desktop/OSD-404/GLDS404_STARsolo")
 
@@ -89,6 +90,13 @@ FeatureScatter(combined,
                feature2 = "nFeature_RNA",
                group.by = "sample")
 
+#Remove hemoglobin 
+grep("^Hb[ab]-", rownames(combined), value = TRUE)
+
+is_hb <- grepl("^Hb[ab]-", rownames(combined))
+cat("Hb genes removed:", sum(is_hb), "-", rownames(combined)[is_hb], "\n")
+combined <- combined[!is_hb, ]
+
 #normalize, find variable features, scale, and run PCA
 combined <- NormalizeData(combined)
 combined <- FindVariableFeatures(combined, nfeatures = 3000)
@@ -109,6 +117,7 @@ combined <- RunUMAP(combined, reduction = "pca", dims = 1:30,
 
 #initial UMAP revealed samples clustering by mouse rather than cell type - indicates batch effect!
 DimPlot(combined, reduction = "umap.unintegrated", group.by = "sample")
+
 
 #use harmony for integration/batch correction across 8 samples
 #corrects technical variation while preserving biological signal
@@ -134,7 +143,6 @@ DimPlot(combined, group.by = "sample")
 DimPlot(combined, group.by = "seurat_clusters", label = TRUE)
 
 
-
 #MARKER GENE DETECTION
 #JoinLayers required before FindAllMarkers in Seurat v5
 combined <- JoinLayers(combined)
@@ -145,6 +153,22 @@ markers <- FindAllMarkers(combined,
                           min.pct         = 0.25,
                           logfc.threshold = 0.25)
 markers %>% group_by(cluster) %>% top_n(10, avg_log2FC) %>% print(n = 250)
+
+
+combined@meta.data %>%
+  filter(seurat_clusters == "22") %>%
+  summarise(mean_nCount = mean(nCount_RNA), mean_nFeature = mean(nFeature_RNA), mean_pct_mt = mean(percent.mt), n = n())
+
+#check how many cells in each cluster
+table(combined$seurat_clusters)
+
+#Remove cluster 22 (low-quality, ribosomal-only, 58 cells)
+combined <- subset(combined, seurat_clusters != "22")
+table(combined$seurat_clusters)  # should show 0-21, 22 gone
+
+combined$seurat_clusters <- droplevels(combined$seurat_clusters)
+table(combined$seurat_clusters)
+
 
 #SINGLER AUTOMATED ANNOTATION 
 #download mouse immune reference
@@ -183,105 +207,62 @@ DimPlot(combined, reduction = "umap", group.by = "singler_labels_clean",
 #compare SingleR labels against cluster numbers
 table(combined$singler_labels, combined$seurat_clusters)
 
-#remove cluster 23 ( has only 37 cells, very small)
-combined <- subset(combined, seurat_clusters != "23")
 
 #FEATUREPLOTS FOR AMBIGUOUS CLUSTERS
-#cluster 11 — dendritic cells
+#cluster 1 — monocyte vs proliferating population
 FeaturePlot(combined,
-            features = c("Flt3", "Zbtb46", "Siglech", "Irf8"),
+            features = c("F13a1", "Csf1r", "Mki67", "Top2a"),
             reduction = "umap", ncol = 2)
 
-#cluster 1 — monocytes
+#cluster 2 — progenitor identity (HSC vs GMP vs other)
 FeaturePlot(combined,
-            features = c("Csf1r", "Cd14", "F13a1", "Kit"),
+            features = c("Kit", "Cd34", "Elane", "Mpo"),
             reduction = "umap", ncol = 2)
 
-#cluster 13 — B cells
+#cluster 8 — mature vs immature neutrophil signature
 FeaturePlot(combined,
-            features = c("Ms4a1", "Cd19", "Pax5", "Ly6d"),
+            features = c("S100a8", "Camp", "Elane", "Ms4a3"),
             reduction = "umap", ncol = 2)
 
-#cluster 17 — macrophages (red pulp macrophages - investigate this further)
-FeaturePlot(combined,
-            features = c("Gata6", "Mrc1", "Adgre1", "Cx3cr1"),
-            reduction = "umap", ncol = 2)
+#check cluster 5 to see about subclustering
+cluster5 <- subset(combined, seurat_clusters == "5")
+cluster5 <- FindNeighbors(cluster5, reduction = "harmony", dims = 1:30)
+cluster5 <- FindClusters(cluster5, resolution = 0.3)
+cluster5 <- RunUMAP(cluster5, reduction = "harmony", dims = 1:30, reduction.name = "umap")
+DimPlot(cluster5, reduction = "umap", group.by = "seurat_clusters", label = TRUE)
+FeaturePlot(cluster5, features = c("Cd3e", "Ncr1", "Trdc", "Klrb1c"), reduction = "umap", ncol = 2)
 
-#cluster 22 — monocyte-derived macrophages
-FeaturePlot(combined,
-            features = c("Mertk", "Mrc1", "Adgre1", "Spic"),
-            reduction = "umap", ncol = 2)
-
-#cluster 3 — mixed progenitor population
-FeaturePlot(combined,
-            features = c("Mcpt8", "Ms4a2", "Cpa3", "Itga2b"),
-            reduction = "umap", ncol = 2)
-
+cluster5_markers <- FindAllMarkers(JoinLayers(cluster5), only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+cluster5_markers %>% filter(cluster == "3") %>% arrange(desc(avg_log2FC)) %>% head(15)
 
 #cell type annotation based on marker genes, SingleR, and FeaturePlot validation
 cell_types <- c(
-  "0"  = "Erythrocytes",
+  "0"  = "B cells",
   "1"  = "Monocytes",
-  "2"  = "Monocytes",
-  "3"  = "HSCs/Progenitors",
+  "2"  = "HSCs/Progenitors",
+  "3"  = "Monocytes (inflammatory)",
   "4"  = "B cells (naive)",
   "5"  = "T cells",
-  "6"  = "B cells",
-  "7"  = "Monocytes (patrolling)",
-  "8"  = "Neutrophils",
+  "6"  = "Monocytes (patrolling)",
+  "7"  = "B cells (atypical/memory)",
+  "8"  = "Neutrophils (immature)",
   "9"  = "T cells (CD8+)",
-  "10" = "Plasmacytoid DC",
-  "11" = "Dendritic cells",
+  "10" = "Dendritic cells",
+  "11" = "Plasmacytoid DC",
   "12" = "B cells (progenitor)",
-  "13" = "B cells",
+  "13" = "Innate B cells",
   "14" = "Plasma cells",
   "15" = "Neutrophils",
-  "16" = "NK cells",
-  "17" = "Macrophages",
-  "18" = "Erythrocytes",
-  "19" = "Platelets",
-  "20" = "Neutrophils (inflammatory)",
-  "21" = "Proerythroblasts",
-  "22" = "Monocyte-derived Macrophages"
+  "16" = "Macrophages",
+  "17" = "NK cells",
+  "18" = "Platelets",
+  "19" = "Neutrophils (inflammatory)",
+  "20" = "Proerythroblasts",
+  "21" = "Monocyte-derived Macrophages"
 )
 
 #apply cell type labels to each cell based on cluster assignment
 combined$cell_type <- as.character(cell_types[as.character(combined$seurat_clusters)])
-
-#CLUSTER 3 SUBCLUSTERING 
-#basophil markers (Mcpt8, Ms4a2, Cpa3) also occur with progenitor markers
-#indicating a mixed population — subcluster to resolve
-cluster3 <- subset(combined, seurat_clusters == "3")
-cluster3 <- FindNeighbors(cluster3, reduction = "harmony", dims = 1:30)
-cluster3 <- FindClusters(cluster3, resolution = 0.3)
-
-DimPlot(cluster3, group.by = "seurat_clusters", label = TRUE)
-FeaturePlot(cluster3, features = c("Mcpt8", "Mpo", "Angpt1", "Cd34"), ncol = 2)
-FeaturePlot(cluster3, features = c("Kit", "Cd34", "Mpo", "Elane", "Mcpt8", "Ms4a2", "Cpa3"),
-            ncol = 3)
-table(cluster3$seurat_clusters)
-
-#find markers for cluster3 subclusters
-cluster3 <- JoinLayers(cluster3)
-cluster3_markers <- FindAllMarkers(cluster3,
-                                   only.pos        = TRUE,
-                                   min.pct         = 0.25,
-                                   logfc.threshold = 0.25)
-
-#top markers for HSCs/MPPs, Granulocyte-monocyte progenitors, and Progenitors intermediate
-cluster3_markers %>%
-  filter(cluster %in% c("0","1", "2")) %>%
-  group_by(cluster) %>%
-  arrange(desc(avg_log2FC)) %>%
-  top_n(10, avg_log2FC) %>%
-  print(n = 30)
-
-# map subcluster identities back onto the parent object using cell barcodes
-combined$hsc_subcluster <- NA
-combined$hsc_subcluster[colnames(cluster3)] <- as.character(cluster3$seurat_clusters)
-combined$cell_type[combined$hsc_subcluster == "0"] <- "HSCs/MPPs"
-combined$cell_type[combined$hsc_subcluster == "1"] <- "Granulocyte-monocyte progenitors"
-combined$cell_type[combined$hsc_subcluster == "2"] <- "Progenitors (intermediate)"
 
 #confirm final cell type count
 length(unique(combined$cell_type))
@@ -293,29 +274,31 @@ DimPlot(combined, reduction = "umap", group.by = "cell_type",
 
 #UMAP formatted for poster
 p <- DimPlot(combined, reduction = "umap", group.by = "cell_type",
-             label = TRUE, label.size = 8, repel = TRUE,
+             label = TRUE, label.size = 5, repel = TRUE,
              pt.size = 0.5) +
   theme(legend.position = "right",
         legend.title = element_blank(),
-        legend.text = element_text(size = 18),
+        legend.text = element_text(size = 16),
         legend.key.size = unit(0.35, "cm"),
-        axis.text.x = element_text(size = 18),
-        axis.text.y = element_text(size = 18),
-        axis.title.x = element_text(size = 18),
-        axis.title.y = element_text(size = 18)) +
+        axis.text.x = element_text(size = 12),
+        axis.text.y = element_text(size = 12),
+        axis.title.x = element_text(size = 16),
+        axis.title.y = element_text(size = 16)) +
   guides(color = guide_legend(ncol = 1, override.aes = list(size = 3)))
+print(p)
 
-ggsave("umap_annotated.png",
-       plot = p,
-       width = 16, height = 15.81, units = "in",
-       dpi = 300, bg = "white")
+table(combined$seurat_clusters, combined$cell_type)
+
+ncol(combined)  
+table(combined$condition)     
+grep("^Hb[ab]-", rownames(combined), value = TRUE)  
+length(unique(combined$cell_type))  
+
 
 #CANONICAL MARKER DOTPLOT 
 #canonical mouse immune marker panel, grouped by lineage
 #check against data first so DotPlot doesn't choke on missing genes
 canonical_markers <- c(
-  # erythroid / progenitor
-  "Hba-a1", "Hba-a2", "Hbb-bs", "Klf1", "Gata1", "Tfrc", "Kit", "Cd34", "Mpo", "Elane",
   # basophil / mast (relevant to the cluster 3 ambiguity)
   "Mcpt8", "Ms4a2", "Cpa3", "Prss34",
   # platelet / megakaryocyte
@@ -361,6 +344,8 @@ cell_type_order <- c(
   "B cells",
   "B cells (naive)",
   "B cells (progenitor)",
+  "B cells (atypical/memory)",
+  "Innate B cells",
   "NK cells",
   "T cells (CD8+)",
   "T cells",
@@ -369,39 +354,40 @@ cell_type_order <- c(
   "Plasmacytoid DC",
   "Dendritic cells",
   "Neutrophils (inflammatory)",
+  "Neutrophils (immature)",
   "Neutrophils",
   "Monocytes (patrolling)",
+  "Monocytes (inflammatory)",
   "Monocytes",
-  "Granulocyte-monocyte progenitors",
-  "Progenitors (intermediate)",
-  "HSCs/MPPs",
+  "HSCs/Progenitors",
   "Proerythroblasts",
-  "Platelets",
-  "Erythrocytes"
+  "Platelets"
 )
 
 #one representative marker per cell type (roughly), ordered for diagonal expression pattern
 poster_markers <- c(
-  "Alas2",    # erythrocytes
-  "Itga2b",   # platelets
-  "Car2",     # proerythroblasts
-  "Mecom",    # HSCs/MPPs
-  "Mpo",      # granulocyte-monocyte progenitors
-  "F13a1",    # monocytes
+  "Itga2b",   # platelets 
+  "Car2",     # proerythroblasts 
+  "Cd34",     # HSCs/Progenitors
+  "F13a1",    # monocytes 
+  "Ccr2",     # monocytes (inflammatory) 
   "Nr4a1",    # monocytes (patrolling)
-  "S100a8",   # neutrophils
-  "Camp",     # neutrophils (inflammatory)
-  "Zbtb46",   # dendritic cells
-  "Siglech",  # plasmacytoid DC
-  "Mertk",    # monocyte-derived macrophages
-  "Gata6",    # macrophages
-  "Lef1",     # T cells
-  "Cd8b1",    # T cells (CD8+)
-  "Nkg7",     # NK cells
+  "Ly6g",     # neutrophils 
+  "Elane",    # neutrophils (immature) 
+  "Acod1",    # neutrophils (inflammatory) 
+  "Flt3",   # dendritic cells 
+  "Siglech",  # plasmacytoid DC 
+  "Mertk",    # monocyte-derived macrophages 
+  "Gata6",    # macrophages 
+  "Lef1",     # T cells 
+  "Cd8b1",    # T cells (CD8+) 
+  "Nkg7",     # NK cells 
+  "Sox5",    # B cells 
+  "Il5ra",    # innate B cells 
+  "Zbtb32",   # B cells (atypical/memory) 
   "Vpreb3",   # B cells (progenitor)
-  "Ighd",     # B cells (naive)
-  "Sox5",     # B cells
-  "Jchain"    # plasma cells
+  "Ighd",     # B cells (naive) 
+  "Jchain"    # plasma cells 
 )
 
 p_dotplot <- DotPlot(combined,
@@ -413,51 +399,86 @@ p_dotplot <- DotPlot(combined,
 
 p_dotplot
 
-ggsave("dotplot_markers.png",
-       plot = p_dotplot,
-       width = 11.27, height = 7.75, units = "in",
-       dpi = 300, bg = "white")
+#check that the dendritic cell split is supported
+FetchData(combined, vars = c("Zbtb46", "Flt3", "cell_type")) %>%
+  filter(cell_type %in% c("Dendritic cells", "Plasmacytoid DC", "Monocytes", 
+                          "Monocytes (inflammatory)", "Macrophages")) %>%
+  group_by(cell_type) %>%
+  summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
 
-#M1/M2 MACROPHAGE POLARIZATION SCORING 
-m1_genes <- c("Nos2", "Il1b", "Tnf", "Il6", "Cxcl9", "Cxcl10", "Il12b", "Ptgs2", "Cd86", "Socs3")
-m2_genes <- c("Arg1", "Mrc1", "Chil3", "Retnla", "Il10", "Cd163", "Il1rn", "Tgfb1", "Vegfa")
-m1_genes <- m1_genes[m1_genes %in% rownames(combined)]
-m2_genes <- m2_genes[m2_genes %in% rownames(combined)]
+#check neutrophil vs inflammatory neutrophil 
+FetchData(combined, vars = c("Retnlg", "Acod1", "cell_type")) %>%
+  filter(cell_type %in% c("Neutrophils", "Neutrophils (inflammatory)")) %>%
+  group_by(cell_type) %>%
+  summarise(mean_Retnlg = mean(Retnlg), pct_Retnlg = mean(Retnlg > 0),
+            mean_Acod1 = mean(Acod1), pct_Acod1 = mean(Acod1 > 0))
 
-combined <- AddModuleScore(combined, features = list(m1_genes), name = "M1_score")
-combined <- AddModuleScore(combined, features = list(m2_genes), name = "M2_score")
+#compare all three neutrophil clusters on granule/maturation markers (Mmp8, Mmp9, Ly6g, Ltf) to support the immature vs mature vs inflammatory labels
+FetchData(combined, vars = c("Mmp8", "Mmp9", "Ly6g", "Ltf", "cell_type")) %>%
+  filter(cell_type %in% c("Neutrophils", "Neutrophils (immature)", "Neutrophils (inflammatory)")) %>%
+  group_by(cell_type) %>%
+  summarise(across(everything(), list(mean = mean, pct = ~mean(. > 0))))
+#cells per sample and which condition each sample belongs to
+table(combined$sample, combined$condition)
 
-VlnPlot(combined, features = c("M1_score1", "M2_score1"),
-        group.by = "cell_type", split.by = "condition", pt.size = 0)
-VlnPlot(combined, features = m1_genes, group.by = "cell_type", pt.size = 0, ncol = 3)
-VlnPlot(combined, features = m2_genes, group.by = "cell_type", pt.size = 0, ncol = 3)
+#B cell subtype markers used for the poster dotplot (Sox5, Ighd, Vpreb3, Zbtb32, Il5ra),
+#to confirm each B subtype is defined by its expected marker
+FetchData(combined, vars = c("Sox5", "Ighd", "Vpreb3", "Zbtb32", "Il5ra", "cell_type")) %>%
+  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)", 
+                          "B cells (atypical/memory)", "Innate B cells")) %>%
+  group_by(cell_type) %>%
+  summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
+
+#which B cell subtypes express the B cell genes (Ebf1, Bank1, Ralgps2, Fchsd2) that came up in the overall FLT vs GC DEGs,
+#to see whether they are concentrated in one subtype
+FetchData(combined, vars = c("Ebf1", "Bank1", "Ralgps2", "Fchsd2", "cell_type")) %>%
+  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)", 
+                          "B cells (atypical/memory)", "Innate B cells")) %>%
+  group_by(cell_type) %>%
+  summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
+
+#Cd4 expression in the two T cell clusters, to check whether "T cells" is CD4+ and distinct from the CD8+ cluster
+FetchData(combined, vars = c("Cd4", "cell_type")) %>%
+  filter(cell_type %in% c("T cells", "T cells (CD8+)")) %>%
+  group_by(cell_type) %>%
+  summarise(mean = mean(Cd4), pct = mean(Cd4 > 0))
+
+#top 15 markers for cluster 0 (B cells)
+markers %>% filter(cluster == "0") %>% arrange(desc(avg_log2FC)) %>% head(15)
+
+#B lineage identity check (Pax5, Btla) across all five B cell subtypes
+FetchData(combined, vars = c("Pax5", "Btla", "cell_type")) %>%
+  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)", 
+                          "B cells (atypical/memory)", "Innate B cells")) %>%
+  group_by(cell_type) %>%
+  summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
+
+#on seurat_list, before merging/filtering, if you still have it, or rerun QC metrics per sample
+combined@meta.data %>%
+  group_by(sample) %>%
+  summarise(
+    median_nFeature = median(nFeature_RNA),
+    median_nCount = median(nCount_RNA),
+    median_pct_mt = median(percent.mt),
+    n = n()
+  )
 
 #QC AND DOUBLET CHECKS 
-#also compare basic QC metrics -- doublets often run higher on both
+#basic QC metrics per cell type -- doublets often run higher on both
 VlnPlot(combined, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"),
         group.by = "cell_type", pt.size = 0)
 
-#check whether "macrophage" cells also carry strong platelet/RBC signal
-#a common sign of phagocytosed material or doublets rather than a clean identity
+#check whether "macrophage" cells also carry strong platelet signal
+#(Hba-a1 removed - no longer in object after Hb gene filtering)
 mac_cells <- subset(combined, cell_type == "Monocyte-derived Macrophages")
-VlnPlot(mac_cells, features = c("Adgre1", "Pf4", "Itga2b", "Ppbp", "Hba-a1"), pt.size = 0)
+VlnPlot(mac_cells, features = c("Adgre1", "Pf4", "Itga2b", "Ppbp"), pt.size = 0)
 
-#QC metrics per erythrocyte cluster to confirm they are not low-quality debris
-combined@meta.data %>%
-  filter(seurat_clusters %in% c("0", "18")) %>%
-  group_by(seurat_clusters) %>%
-  summarise(mean_nCount   = mean(nCount_RNA),
-            mean_nFeature = mean(nFeature_RNA),
-            mean_pct_mt   = mean(percent.mt),
-            n             = n())
-
-table(combined$seurat_clusters[combined$seurat_clusters %in% c("0", "18")],
-      combined$sample[combined$seurat_clusters %in% c("0", "18")])
-
-#DOUBLET DETECTION
+#doublet check across final annotation 
+combined <- JoinLayers(combined)
 sce <- as.SingleCellExperiment(combined)
 sce <- scDblFinder(sce, samples = "sample")
 combined$scDblFinder_class <- sce$scDblFinder.class
+
 table(combined$cell_type, combined$scDblFinder_class)
 
 #CELL COMPOSITION ANALYSIS 
@@ -465,18 +486,13 @@ table(combined$cell_type, combined$scDblFinder_class)
 table(combined$seurat_clusters)
 #check overall cell counts per condition
 table(combined$condition)
-
 #check per-sample cell counts to assess within-group balance
-#FO20 notably lower than other FLT mice (708 vs 2655-3965)
-#GO14 and GO19 higher than other GC mice
 table(combined$sample, combined$condition)
 table(combined$cell_type, combined$condition)
-
 #what fraction of total cells is this?
 round(prop.table(table(combined$cell_type)) * 100, 2)
 
 #normalize by total cells per condition to get proportions
-#necessary bc GC has significantly more cells than FLT (14750 vs 10562)
 prop_table <- combined@meta.data %>%
   group_by(condition, cell_type) %>%
   summarise(n = n(), .groups = "drop") %>%
@@ -542,11 +558,7 @@ p_composition <- combined@meta.data %>%
   guides(fill = guide_legend(ncol = 1, override.aes = list(size = 5))) +
   labs(title = "Cell type composition: Flight vs Ground Control",
        x = NULL, y = "Proportion (%)", fill = "Cell type")
-
-ggsave("cell_type_composition.png",
-       plot = p_composition,
-       width = 11.27, height = 7.75, units = "in",
-       dpi = 300, bg = "white")
+print(p_composition)
 
 #cell type proportions
 combined@meta.data %>%
@@ -575,7 +587,6 @@ combined@meta.data %>%
        x = NULL, y = "Cell count", fill = "Condition")
 
 #visualize condition distribution across UMAP
-#GC dominates visually due to higher cell count
 DimPlot(combined,
         reduction = "umap",
         group.by = "condition",
@@ -592,37 +603,21 @@ DimPlot(combined,
         pt.size = 0.3)
 
 #MITOCARTA MODULE SCORING 
-#load MitoCarta3.0 mouse mitochondrial gene set for module scoring
 mitocarta <- read_excel("/Users/lexigover/Downloads/Mouse.MitoCarta3.0.xls",
                         sheet = "A Mouse MitoCarta3.0")
 mito_genes <- mitocarta$Symbol
-
-#keep only genes that are actually in the Seurat object
 mito_genes <- mito_genes[mito_genes %in% rownames(combined)]
 cat("MitoCarta genes found in dataset:", length(mito_genes), "\n")
 
-
-#run module scoring
 combined <- AddModuleScore(
   combined,
   features = list(mito_genes),
   name = "MitoCarta_score"
 )
-
-VlnPlot(combined, 
-        features = "MitoCarta_score1",
-        group.by = "cell_type",
-        pt.size = 0)
-
-FeaturePlot(combined,
-            features = "MitoCarta_score1",
-            reduction = "umap")
-
-VlnPlot(combined,
-        features = "MitoCarta_score1",
-        group.by = "cell_type",
-        split.by = "condition",
-        pt.size = 0)
+VlnPlot(combined, features = "MitoCarta_score1", group.by = "cell_type", pt.size = 0)
+FeaturePlot(combined, features = "MitoCarta_score1", reduction = "umap")
+VlnPlot(combined, features = "MitoCarta_score1",
+        group.by = "cell_type", split.by = "condition", pt.size = 0)
 
 #test MitoCarta score difference between FLT and GC within each cell type (Wilcoxon)
 score_test <- combined@meta.data %>%
@@ -638,25 +633,18 @@ score_test <- combined@meta.data %>%
 print(score_test, n = 24)
 
 #MITODAMP PATHWAY GENE SETS
-#function to read a single gene set from a .gmt file
 read_gmt <- function(file) {
   lines <- readLines(file)
   genes <- strsplit(lines, "\t")[[1]]
-  genes <- genes[-(1:2)]  # remove gene set name and description
+  genes <- genes[-(1:2)]
   return(genes)
 }
-
-
-#load all 5 gene sets
 mitophagy_genes  <- read_gmt("~/Desktop/GOBP_MITOPHAGY.v2026.1.Mm.gmt")
 cgas_sting_genes <- read_gmt("~/Desktop/GOBP_CGAS_STING_SIGNALING_PATHWAY.v2026.1.Mm.gmt")
 nlrp3_genes      <- read_gmt("~/Desktop/GOBP_NLRP3_INFLAMMASOME_COMPLEX_ASSEMBLY.v2026.1.Mm.gmt")
 aim2_genes       <- read_gmt("~/Desktop/GOBP_AIM2_INFLAMMASOME_COMPLEX_ASSEMBLY.v2026.1.Mm.gmt")
 ifn_genes        <- read_gmt("~/Desktop/HALLMARK_INTERFERON_ALPHA_RESPONSE.v2026.1.Mm.gmt")
 
-
-
-#check how many genes were found in each set
 cat("Mitophagy genes:", length(mitophagy_genes), "\n")
 cat("cGAS-STING genes:", length(cgas_sting_genes), "\n")
 cat("NLRP3 genes:", length(nlrp3_genes), "\n")
@@ -675,18 +663,11 @@ combined <- AddModuleScore(combined, features = list(nlrp3_genes),      name = "
 combined <- AddModuleScore(combined, features = list(aim2_genes),       name = "AIM2_score")
 combined <- AddModuleScore(combined, features = list(ifn_genes),        name = "IFN_score")
 
-
-#violin plots split by condition for each score
-VlnPlot(combined, features = "Mitophagy_score1",
-        group.by = "cell_type", split.by = "condition", pt.size = 0)
-VlnPlot(combined, features = "cGAS_STING_score1",
-        group.by = "cell_type", split.by = "condition", pt.size = 0)
-VlnPlot(combined, features = "NLRP3_score1",
-        group.by = "cell_type", split.by = "condition", pt.size = 0)
-VlnPlot(combined, features = "AIM2_score1",
-        group.by = "cell_type", split.by = "condition", pt.size = 0)
-VlnPlot(combined, features = "IFN_score1",
-        group.by = "cell_type", split.by = "condition", pt.size = 0)
+VlnPlot(combined, features = "Mitophagy_score1", group.by = "cell_type", split.by = "condition", pt.size = 0)
+VlnPlot(combined, features = "cGAS_STING_score1", group.by = "cell_type", split.by = "condition", pt.size = 0)
+VlnPlot(combined, features = "NLRP3_score1", group.by = "cell_type", split.by = "condition", pt.size = 0)
+VlnPlot(combined, features = "AIM2_score1", group.by = "cell_type", split.by = "condition", pt.size = 0)
+VlnPlot(combined, features = "IFN_score1", group.by = "cell_type", split.by = "condition", pt.size = 0)
 
 #Wilcoxon test: each pathway score FLT vs GC within each cell type
 score_names <- c("Mitophagy_score1", "cGAS_STING_score1",
@@ -708,66 +689,35 @@ for (score in score_names) {
 
 #subset Macrophages for pathway and gene expression plots
 mac_ifn <- subset(combined, cell_type == "Macrophages")
+VlnPlot(mac_ifn, features = "IFN_score1", group.by = "condition",
+        cols = c("FLT" = "#2166AC", "GC" = "#D6604D"), pt.size = 0.5) +
+  labs(title = "Interferon Alpha Response Score", x = NULL, y = "IFN Module Score") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 14),
+        axis.title.y = element_text(size = 16), plot.title = element_text(size = 18, face = "bold"))
 
-
-#IFN Alpha Response score in Macrophages (Wilcoxon padj = 2.31e-20)
-VlnPlot(mac_ifn,
-        features  = "IFN_score1",
-        group.by  = "condition",
-        cols      = c("FLT" = "#2166AC", "GC" = "#D6604D"),
-        pt.size   = 0.5) +
-  labs(title = "Interferon Alpha Response Score",
-       x = NULL, y = "IFN Module Score") +
-  theme(legend.position  = "none",
-        axis.text.x      = element_text(size = 16),
-        axis.text.y      = element_text(size = 14),
-        axis.title.y     = element_text(size = 16),
-        plot.title       = element_text(size = 18, face = "bold"))
-
-
-#Snca upregulated in FLT Macrophages (Wilcoxon p = 1.18e-22)
-VlnPlot(mac_ifn,
-        features  = "Snca",
-        group.by  = "condition",
-        cols      = c("FLT" = "#2166AC", "GC" = "#D6604D"),
-        pt.size   = 0.5) +
-  labs(title = "Snca Expression",
-       x = NULL, y = "Expression Level") +
-  theme(legend.position  = "none",
-        axis.text.x      = element_text(size = 16),
-        axis.text.y      = element_text(size = 14),
-        axis.title.y     = element_text(size = 16),
-        plot.title       = element_text(size = 18, face = "bold"))
+VlnPlot(mac_ifn, features = "Snca", group.by = "condition",
+        cols = c("FLT" = "#2166AC", "GC" = "#D6604D"), pt.size = 0.5) +
+  labs(title = "Snca Expression", x = NULL, y = "Expression Level") +
+  theme(legend.position = "none",
+        axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 14),
+        axis.title.y = element_text(size = 16), plot.title = element_text(size = 18, face = "bold"))
 
 #CELL-LEVEL DEG ANALYSIS 
 #overall DEG analysis: all FLT vs all GC cells regardless of cell type
-#note: confounded by cell type composition differences - use as overview?
 Idents(combined) <- "condition"
-all_degs <- FindMarkers(combined,
-                        ident.1 = "FLT",
-                        ident.2 = "GC",
-                        min.pct = 0.25,
-                        logfc.threshold = 0.25)
+all_degs <- FindMarkers(combined, ident.1 = "FLT", ident.2 = "GC",
+                        min.pct = 0.25, logfc.threshold = 0.25)
 all_degs$gene <- rownames(all_degs)
-
-#classify genes as up in FLT, up in GC, or not significant
 all_degs <- all_degs %>%
   mutate(direction = case_when(
     avg_log2FC > 0.25  & p_val_adj < 0.05 ~ "Up in FLT",
     avg_log2FC < -0.25 & p_val_adj < 0.05 ~ "Up in GC",
     TRUE ~ "NS"
   ))
-
-#top 10 upregulated and downregulated genes
-top10_up   <- all_degs %>% filter(direction == "Up in FLT") %>%
-  arrange(desc(avg_log2FC)) %>% head(10)
-top10_down <- all_degs %>% filter(direction == "Up in GC") %>%
-  arrange(avg_log2FC) %>% head(10)
+top10_up   <- all_degs %>% filter(direction == "Up in FLT") %>% arrange(desc(avg_log2FC)) %>% head(10)
+top10_down <- all_degs %>% filter(direction == "Up in GC") %>% arrange(avg_log2FC) %>% head(10)
 top10 <- bind_rows(top10_up, top10_down)
-
-top10
-
-#overall volcano plot
 ggplot(all_degs, aes(x = avg_log2FC, y = -log10(p_val_adj), color = direction)) +
   geom_point(alpha = 0.5, size = 1) +
   geom_text_repel(data = top10, aes(label = gene), size = 3, max.overlaps = 20) +
@@ -778,28 +728,24 @@ ggplot(all_degs, aes(x = avg_log2FC, y = -log10(p_val_adj), color = direction)) 
   geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
   geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50")
 
-#DEG analysis within each cell type with volcano plot
-#note: treats each cell as independent — pseudoreplication at n=4
+#DEG analysis within each cell type (updated list to match current 21 cell types)
 Idents(combined) <- "cell_type"
 cell_types_to_test <- c(
-  "Monocytes", "Monocytes (patrolling)", "Neutrophils",
-  "Neutrophils (inflammatory)", "NK cells", "T cells",
-  "T cells (CD8+)", "B cells (naive)", "B cells",
+  "Monocytes", "Monocytes (inflammatory)", "Monocytes (patrolling)",
+  "Neutrophils", "Neutrophils (immature)", "Neutrophils (inflammatory)",
+  "NK cells", "T cells", "T cells (CD8+)",
+  "B cells", "B cells (naive)", "B cells (progenitor)",
+  "B cells (atypical/memory)", "Innate B cells",
   "Macrophages", "Monocyte-derived Macrophages",
   "Dendritic cells", "Plasmacytoid DC"
 )
-
 deg_results <- list()
 for (ct in cell_types_to_test) {
   cat("Running DEG for", ct, "\n")
   tryCatch({
-    degs <- FindMarkers(combined,
-                        ident.1      = "FLT",
-                        ident.2      = "GC",
-                        group.by     = "condition",
-                        subset.ident = ct,
-                        min.pct      = 0.25,
-                        logfc.threshold = 0.25)
+    degs <- FindMarkers(combined, ident.1 = "FLT", ident.2 = "GC",
+                        group.by = "condition", subset.ident = ct,
+                        min.pct = 0.25, logfc.threshold = 0.25)
     degs$gene      <- rownames(degs)
     degs$cell_type <- ct
     degs <- degs %>%
@@ -810,10 +756,8 @@ for (ct in cell_types_to_test) {
       ))
     deg_results[[ct]] <- degs
     
-    top10_up   <- degs %>% filter(direction == "Up in FLT") %>%
-      arrange(desc(avg_log2FC)) %>% head(10)
-    top10_down <- degs %>% filter(direction == "Up in GC") %>%
-      arrange(avg_log2FC) %>% head(10)
+    top10_up   <- degs %>% filter(direction == "Up in FLT") %>% arrange(desc(avg_log2FC)) %>% head(10)
+    top10_down <- degs %>% filter(direction == "Up in GC") %>% arrange(avg_log2FC) %>% head(10)
     top10_ct <- bind_rows(top10_up, top10_down)
     
     p <- ggplot(degs, aes(x = avg_log2FC, y = -log10(p_val_adj), color = direction)) +
@@ -831,18 +775,14 @@ for (ct in cell_types_to_test) {
     cat("Skipping", ct, "- insufficient cells\n")
   })
 }
-
 all_cell_type_degs <- bind_rows(deg_results)
-
 deg_summary <- bind_rows(deg_results) %>%
   filter(p_val_adj < 0.05) %>%
   group_by(cell_type, direction) %>%
   summarise(n_degs = n(), .groups = "drop") %>%
   arrange(cell_type)
 print(deg_summary, n = 50)
-
 deg_summary %>%
-  filter(!cell_type %in% c("Neutrophils", "NK cells", "T cells (CD8+)")) %>%
   ggplot(aes(x = reorder(cell_type, n_degs), y = n_degs, fill = direction)) +
   geom_bar(stat = "identity", position = "dodge") +
   scale_fill_manual(values = c("Up in FLT" = "#2166AC", "Up in GC" = "#D6604D")) +
@@ -857,8 +797,8 @@ deg_summary %>%
   labs(title = "Significant DEGs per cell type: Flight vs Ground Control",
        x = NULL, y = "Number of significant DEGs", fill = NULL)
 
+
 #PSEUDOBULK DESeq2 
-#aggregate raw counts per cell type per mouse since mouse is the statistical unit (n=4)
 pseudo_bulk <- AggregateExpression(
   object        = combined,
   group.by      = c("cell_type", "orig.ident", "condition"),
@@ -866,14 +806,12 @@ pseudo_bulk <- AggregateExpression(
   return.seurat = FALSE
 )
 cts <- pseudo_bulk$RNA
-
 deg_results_deseq2 <- list()
 for (ct in cell_types_to_test) {
   cat("\nDESeq2:", ct, "\n")
   ct_escaped <- gsub("([\\+\\(\\)])", "\\\\\\1", ct)
   ct_cols    <- colnames(cts)[grep(paste0("^", ct_escaped, "[-_]"), colnames(cts))]
   
-  #require at least 6 pseudobulk columns (3 FLT + 3 GC minimum)
   if (length(ct_cols) < 6) {
     cat("skipping", ct, "- fewer than 6 pseudobulk samples\n"); next
   }
@@ -888,9 +826,10 @@ for (ct in cell_types_to_test) {
   }
   
   tryCatch({
-    dds  <- DESeqDataSetFromMatrix(countData = cluster_counts, colData = meta,
-                                   design = ~ condition)
-    keep <- rowSums(counts(dds) >= 5) >= 3
+    dds  <- DESeqDataSetFromMatrix(countData = cluster_counts, colData = meta, design = ~ condition)
+    #gene filter tightened for small n (4 vs 4): counts >=10 in at least 4 samples
+    #(aligned with limma-voom filter below so both methods test the same gene set)
+    keep <- rowSums(counts(dds) >= 10) >= 4
     dds  <- dds[keep, ]
     dds  <- DESeq(dds, quiet = TRUE)
     res  <- results(dds, contrast = c("condition", "FLT", "GC"))
@@ -924,9 +863,6 @@ for (ct in cell_types_to_test) {
     
   }, error = function(e) { cat("error for", ct, ":", e$message, "\n") })
 }
-
-
-#summary of DESeq2 significant hits
 all_deseq2_degs <- bind_rows(deg_results_deseq2)
 deg_summary_deseq2 <- all_deseq2_degs %>%
   filter(p_val_adj < 0.05) %>%
@@ -935,16 +871,11 @@ deg_summary_deseq2 <- all_deseq2_degs %>%
   arrange(cell_type)
 print(deg_summary_deseq2, n = 50)
 
-
-#Hbb-bs and Hba-a1 upregulated in FLT Monocyte-derived Macrophages (DESeq2 padj = 0.009)
-VlnPlot(mac_cells,
-        features = c("Hbb-bs", "Hba-a1"),
-        split.by = "condition",
-        pt.size  = 0,
-        ncol     = 2)
+#p-value distribution sanity check
+hist(deg_results_deseq2[["Monocytes"]]$p_val, breaks = 50, main = "Monocytes raw p-values")
+hist(deg_results_deseq2[["T cells"]]$p_val, breaks = 50, main = "T cells raw p-values")
 
 #LIMMA-VOOM
-#pseudobulk limma-voom per cell type
 deg_results_limma <- list()
 for (ct in cell_types_to_test) {
   cat("\nlimma:", ct, "\n")
@@ -966,7 +897,8 @@ for (ct in cell_types_to_test) {
   }
   
   tryCatch({
-    keep           <- rowSums(cluster_counts >= 5) >= 3
+    #gene filter aligned with DESeq2 above: counts >=10 in at least 4 samples
+    keep           <- rowSums(cluster_counts >= 10) >= 4
     cluster_counts <- cluster_counts[keep, ]
     design <- model.matrix(~ conditions)
     v      <- voom(cluster_counts, design, plot = FALSE)
@@ -1000,10 +932,6 @@ for (ct in cell_types_to_test) {
     
   }, error = function(e) { cat("error for", ct, ":", e$message, "\n") })
 }
-
-
-
-#summary of limma significant hits
 all_limma_degs <- bind_rows(deg_results_limma)
 deg_summary_limma <- all_limma_degs %>%
   filter(adj.P.Val < 0.05) %>%
@@ -1012,69 +940,97 @@ deg_summary_limma <- all_limma_degs %>%
   arrange(cell_type)
 print(deg_summary_limma, n = 50)
 
-#Cxcl13 and Serpinb2 downregulated in FLT Macrophages (limma padj < 0.001 and 0.005)
-VlnPlot(mac_ifn,
-        features = c("Cxcl13", "Serpinb2"),
-        split.by = "condition",
-        pt.size  = 0,
-        ncol     = 2)
-
 #compare DESeq2 and limma hits 
 deseq2_sig <- all_deseq2_degs %>%
   filter(p_val_adj < 0.05) %>%
   dplyr::select(gene, cell_type, avg_log2FC, p_val_adj, direction)
-
 limma_sig <- all_limma_degs %>%
   filter(adj.P.Val < 0.05) %>%
   dplyr::select(gene, cell_type, logFC, adj.P.Val, direction)
-
 cat("\nDESeq2 significant genes:\n"); print(deseq2_sig)
 cat("\nlimma significant genes:\n");  print(limma_sig)
 
 
-#erythroid genes in monocyte-derived macrophages might reflect erythrophagocytosis not macrophage-intrinsic transcriptional changes under spaceflight ?
-cat("\nerythroid gene check — Monocyte-derived Macrophages vs Macrophages:\n")
-bind_rows(deg_results_deseq2) %>%
-  filter(cell_type %in% c("Monocyte-derived Macrophages", "Macrophages"),
-         gene %in% c("Hbb-bs", "Hba-a1")) %>%
-  dplyr::select(gene, cell_type, avg_log2FC, p_val_adj)
+#check for previously-flagged B cell composition-driven genes -
+#confirms whether they're real within-celltype effects or composition artifacts
+#(see earlier cell-level "Overall DEGs" discussion)
+deseq2_sig %>% filter(gene %in% c("Ebf1", "Pax5", "Bank1", "Aff3", "Ikzf3", "Bach2", "Foxp1"))
+limma_sig %>% filter(gene %in% c("Ebf1", "Pax5", "Bank1", "Aff3", "Ikzf3", "Bach2", "Foxp1"))
 
-bind_rows(deg_results_limma) %>%
-  filter(cell_type %in% c("Monocyte-derived Macrophages", "Macrophages"),
-         gene %in% c("Hbb-bs", "Hba-a1")) %>%
-  dplyr::select(gene, cell_type, logFC, adj.P.Val)
+#save a checkpoint
+saveRDS(combined, "combined_final_with_degs.rds")
 
+#check hemoglobin-expressing cell impact
+#reload raw matrices (same as original loading step)
+hb_check_list <- list()
+for (i in seq_len(nrow(sample_info))) {
+  path <- file.path(paste0(sample_info$sample[i], "_GeneFull"),
+                    paste0("RRRM2_PBMC_", sample_info$sample[i], "_GeneFull"),
+                    "filtered")
+  counts <- ReadMtx(mtx = file.path(path, "matrix.mtx"),
+                    cells = file.path(path, "barcodes.tsv"),
+                    features = file.path(path, "features.tsv"))
+  obj <- CreateSeuratObject(counts = counts, project = sample_info$sample[i],
+                            min.cells = 3, min.features = 200)
+  obj$sample    <- sample_info$sample[i]
+  obj$condition <- sample_info$condition[i]
+  hb_check_list[[sample_info$sample[i]]] <- obj
+}
+hb_check <- merge(hb_check_list[[1]], y = hb_check_list[2:length(hb_check_list)],
+                  add.cell.ids = sample_info$sample)
+#apply the SAME cell-level QC threshold used originally, so this reflects
+#the same population you'd actually be filtering within
+hb_check[["percent.mt"]] <- PercentageFeatureSet(hb_check, pattern = "^mt-")
+hb_check <- subset(hb_check,
+                   subset = nFeature_RNA > 300 & nFeature_RNA < 5000 &
+                     nCount_RNA > 500 & nCount_RNA < 30000 &
+                     percent.mt < 20)
 
+#compute percent.hb
+is_hb <- grepl("^Hb[ab]-", rownames(hb_check))
+hb_check[["percent.hb"]] <- PercentageFeatureSet(hb_check, features = rownames(hb_check)[is_hb])
+#look at the distribution before picking any threshold
+summary(hb_check$percent.hb)
+VlnPlot(hb_check, features = "percent.hb", group.by = "sample", pt.size = 0)
+#how many cells would be affected at a few candidate thresholds
+for (thresh in c(1, 2, 5, 10)) {
+  n_affected <- sum(hb_check$percent.hb > thresh)
+  pct_affected <- round(100 * n_affected / ncol(hb_check), 2)
+  cat("Threshold >", thresh, "%: ", n_affected, "cells (", pct_affected, "% of total)\n")
+}
+#per-sample breakdown at a reasonable candidate threshold
+hb_check@meta.data %>%
+  group_by(sample) %>%
+  summarise(n_total = n(),
+            n_above_2pct = sum(percent.hb > 2),
+            pct_above_2pct = round(100 * n_above_2pct / n_total, 2))
 
+deg_results[["Macrophages"]] %>% filter(gene == "Snca")
+all_cell_type_degs %>% filter(gene == "Snca") %>% arrange(p_val_adj)
 
-
-
-#compute percent.hb directly 
-is_hb <- grepl("^Hb[ab]-", rownames(combined))
-combined[["percent.hb"]] <- PercentageFeatureSet(combined, features = rownames(combined)[is_hb])
+#CONTAMINATION VALIDATION: does Snca / IFN score hold up after Hb correction?
+#if hb_check still exists from the exploratory check above:
+combined$percent.hb <- hb_check$percent.hb[match(colnames(combined), colnames(hb_check))]
+#confirm the transfer worked (no NAs for cells present in both objects)
+sum(is.na(combined$percent.hb))
 
 mac_ifn <- subset(combined, cell_type == "Macrophages")
-
-#does percent.hb even differ between FLT and GC in Macrophages? (the real risk factor)
+#does percent.hb differ between FLT and GC in Macrophages?
 wilcox.test(percent.hb ~ condition, data = mac_ifn@meta.data)
-
 #does Snca correlate with contamination level?
 snca_expr <- GetAssayData(mac_ifn, layer = "data")["Snca", ]
 cor.test(snca_expr, mac_ifn$percent.hb, method = "spearman")
-
 #does Snca still differ by condition AFTER controlling for percent.hb?
 mac_ifn$snca_expr <- snca_expr
 summary(glm(snca_expr ~ condition + percent.hb, data = mac_ifn@meta.data))
-
 #same for IFN score
 summary(glm(IFN_score1 ~ condition + percent.hb, data = mac_ifn@meta.data))
 
-
-# make sure percent.hb is computed on the full object first 
-cell_types_snca <- c("T cells", "B cells", "Macrophages", "B cells (naive)", 
-                     "Monocytes (patrolling)", "NK cells")
-
-snca_contamination_check <- lapply(cell_types_snca, function(ct) {
+#repeat across all cell types where Snca was significant in the pooled/per-celltype DEG results
+cell_types_snca_all8 <- c("B cells", "T cells", "B cells (atypical/memory)", 
+                          "Macrophages", "B cells (naive)", "Innate B cells",
+                          "Monocytes (patrolling)", "NK cells")
+snca_contamination_check_all8 <- lapply(cell_types_snca_all8, function(ct) {
   sub_obj <- subset(combined, cell_type == ct)
   
   hb_test <- wilcox.test(percent.hb ~ condition, data = sub_obj@meta.data)
@@ -1089,12 +1045,569 @@ snca_contamination_check <- lapply(cell_types_snca, function(ct) {
   
   data.frame(
     cell_type = ct,
+    n_cells = ncol(sub_obj),
     hb_by_condition_p = hb_test$p.value,
     snca_hb_correlation = cor_test$estimate,
     condition_p_after_adjustment = glm_summary["conditionGC", "Pr(>|t|)"],
     condition_estimate = glm_summary["conditionGC", "Estimate"]
   )
 })
+snca_check_all8_df <- bind_rows(snca_contamination_check_all8)
+print(snca_check_all8_df)
 
-snca_contamination_check_df <- bind_rows(snca_contamination_check)
-print(snca_contamination_check_df)
+#How many significant DEGs does Macrophages actually have in the corrected object?
+nrow(deg_results[["Macrophages"]] %>% filter(p_val_adj < 0.05))
+
+#compare to other cell types to see if Macrophages is really the strongest
+deg_summary %>% 
+  group_by(cell_type) %>% 
+  summarise(total_degs = sum(n_degs)) %>% 
+  arrange(desc(total_degs))
+
+#Are interferon-stimulated genes actually enriched among Macrophage DEGs?
+mac_degs_up <- deg_results[["Macrophages"]] %>% 
+  filter(p_val_adj < 0.05, avg_log2FC > 0.25) %>%
+  pull(gene)
+
+#how many of the significantly upregulated FLT genes are IFN-response genes?
+sum(mac_degs_up %in% ifn_genes)
+length(mac_degs_up)
+mac_degs_up[mac_degs_up %in% ifn_genes]  # actually list which ones
+
+#does the IFN module score itself support this claim?
+score_test %>% filter(cell_type == "Macrophages")
+
+#repeated below with a fixed seed for a reproducible final value
+wilcox.test(IFN_score1 ~ condition, data = mac_ifn@meta.data)
+
+grep("^Hb[ab]-", rownames(mac_ifn), value = TRUE)  #should be empty if corrected object
+"Erythrocytes" %in% unique(combined$cell_type)      #should be FALSE
+nrow(mac_ifn)                                       
+
+#recompute IFN score with fixed seed for a clean test
+set.seed(42)
+combined <- AddModuleScore(combined, features = list(ifn_genes), name = "IFN_score")
+mac_ifn <- subset(combined, cell_type == "Macrophages")
+wilcox.test(IFN_score1 ~ condition, data = mac_ifn@meta.data)
+
+#recompute the full per-cell-type IFN test with correction, using this freshly-seeded IFN_score1
+ifn_score_test <- combined@meta.data %>%
+  group_by(cell_type) %>%
+  summarise(
+    FLT_mean = mean(IFN_score1[condition == "FLT"]),
+    GC_mean  = mean(IFN_score1[condition == "GC"]),
+    p_value  = wilcox.test(IFN_score1[condition == "FLT"],
+                           IFN_score1[condition == "GC"])$p.value
+  ) %>%
+  mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
+  arrange(p_adj)
+print(ifn_score_test, n = 22)
+
+b_cells_check <- subset(combined, cell_type == "B cells")
+
+#does contamination differ between FLT/GC in B cells specifically?
+wilcox.test(percent.hb ~ condition, data = b_cells_check@meta.data)
+
+#does Snca correlate with contamination in B cells?
+snca_expr_b <- GetAssayData(b_cells_check, layer = "data")["Snca", ]
+cor.test(snca_expr_b, b_cells_check$percent.hb, method = "spearman")
+
+#does condition survive after controlling for percent.hb?
+b_cells_check$snca_expr <- snca_expr_b
+summary(glm(snca_expr ~ condition + percent.hb, data = b_cells_check@meta.data))
+summary(glm(IFN_score1 ~ condition + percent.hb, data = b_cells_check@meta.data))
+ifn_expr_b <- b_cells_check$IFN_score1
+cor.test(ifn_expr_b, b_cells_check$percent.hb, method = "spearman")
+
+#Innate B cells
+innate_b <- subset(combined, cell_type == "Innate B cells")
+VlnPlot(innate_b, features = "IFN_score1", group.by = "condition",
+        cols = c("FLT" = "#2166AC", "GC" = "#D6604D"), pt.size = 0.5) +
+  labs(title = "Interferon Alpha Response Score", x = NULL, y = "IFN Module Score") +
+  theme(legend.position = "none")
+
+#confirm direction matches the claim (FLT > GC)
+innate_b@meta.data %>%
+  group_by(condition) %>%
+  summarise(mean_ifn = mean(IFN_score1))
+
+#confirm it survives the contamination check 
+summary(glm(IFN_score1 ~ condition + percent.hb, data = innate_b@meta.data))
+
+#final poster-ready plots
+VlnPlot(innate_b,
+        features  = "IFN_score1",
+        group.by  = "condition",
+        cols      = c("FLT" = "#2166AC", "GC" = "#D6604D"),
+        pt.size   = 0.5) +
+  labs(title = "Interferon Alpha Response Score",
+       x = NULL, y = "IFN Module Score") +
+  theme(legend.position  = "none",
+        axis.text.x      = element_text(size = 16),
+        axis.text.y      = element_text(size = 14),
+        axis.title.y     = element_text(size = 16),
+        plot.title       = element_text(size = 18, face = "bold"))
+mac_cells_final <- subset(combined, cell_type == "Macrophages")
+
+VlnPlot(mac_cells_final,
+        features  = "Snca",
+        group.by  = "condition",
+        cols      = c("FLT" = "#2166AC", "GC" = "#D6604D"),
+        pt.size   = 0.5) +
+  labs(title = "Snca Expression",
+       x = NULL, y = "Expression Level") +
+  theme(legend.position  = "none",
+        axis.text.x      = element_text(size = 16),
+        axis.text.y      = element_text(size = 14),
+        axis.title.y     = element_text(size = 16),
+        plot.title       = element_text(size = 18, face = "bold"))
+
+
+#CellChat setup and dependencies
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+  #install.packages("BiocManager")
+#BiocManager::install(c("BiocNeighbors", "ComplexHeatmap"))
+#install.packages("NMF")
+#install.packages("circlize")
+#install.packages("ggalluvial")
+#if (!requireNamespace("devtools", quietly = TRUE))
+  #install.packages("devtools")
+#devtools::install_github("jinworks/CellChat")
+
+library(CellChat)
+library(Seurat)
+library(patchwork)
+library(NMF)
+library(foreach)
+library(ggalluvial)
+library(plyr)
+
+options(stringsAsFactors = FALSE)
+registerDoSEQ()  #force sequential NMF - avoids parallel worker errors
+
+dir.create("plots/comparison", recursive = TRUE, showWarnings = FALSE)
+
+#create a CellChat-safe version of cell_type with parentheses removed
+combined$cell_type_cc <- gsub("\\s*\\(([^)]+)\\)", " \\1", combined$cell_type)
+#this converts "Monocytes (patrolling)" -> "Monocytes patrolling", etc.
+#check it worked correctly across all your cell types:
+unique(combined$cell_type_cc)
+
+#Add broad cell type layer (built on parenthesis-free cell_type_cc, for CellChat)
+#confirm exact values before mapping - critical since names must match exactly
+unique(combined$cell_type_cc)
+
+combined$celltype_fine <- combined$cell_type_cc
+
+combined$celltype_broad <- mapvalues(combined$celltype_fine,
+                                     from = c("B cells", "B cells atypical/memory", "B cells naive", "B cells progenitor",
+                                              "Innate B cells", "Plasma cells",
+                                              "Dendritic cells", "Plasmacytoid DC",
+                                              "Monocytes", "Monocytes inflammatory", "Monocytes patrolling",
+                                              "Macrophages", "Monocyte-derived Macrophages",
+                                              "Neutrophils", "Neutrophils immature", "Neutrophils inflammatory",
+                                              "NK cells", "T cells", "T cells CD8+",
+                                              "HSCs/Progenitors", "Proerythroblasts", "Platelets"),
+                                     to   = c("B Cells", "B Cells", "B Cells", "B Cells",
+                                              "B Cells", "B Cells",
+                                              "Dendritic Cells", "Dendritic Cells",
+                                              "Monocytes", "Monocytes", "Monocytes",
+                                              "Macrophages", "Macrophages",
+                                              "Neutrophils", "Neutrophils", "Neutrophils",
+                                              "NK Cells", "T Cells", "T Cells",
+                                              "HSCs/Progenitors", "Erythroid Cells", "Platelets")
+)
+
+
+#Reorder Clusters
+Idents(combined) <- "celltype_broad"
+broad_order <- c("HSCs/Progenitors", "Monocytes", "Macrophages", "Dendritic Cells",
+                 "T Cells", "NK Cells", "Neutrophils", "B Cells", "Erythroid Cells", "Platelets")
+combined$celltype_broad <- factor(combined$celltype_broad, levels = broad_order)
+DimPlot(combined, group.by = "celltype_broad", label = TRUE) + ggtitle("Broad Cell Types")
+
+Idents(combined) <- "celltype_fine"
+fine_order <- c("HSCs/Progenitors",
+                "Monocytes", "Monocytes inflammatory", "Monocytes patrolling",
+                "Macrophages", "Monocyte-derived Macrophages",
+                "Dendritic cells", "Plasmacytoid DC",
+                "T cells", "T cells CD8+", "NK cells",
+                "Neutrophils", "Neutrophils immature", "Neutrophils inflammatory",
+                "B cells", "B cells naive", "B cells progenitor",
+                "B cells atypical/memory", "Innate B cells", "Plasma cells",
+                "Proerythroblasts", "Platelets")
+combined$celltype_fine <- factor(combined$celltype_fine, levels = fine_order)
+DimPlot(combined, group.by = "celltype_fine", label = TRUE) + ggtitle("Fine Cell Types")
+
+#Part 1: FLT group
+seurat_flt <- subset(combined, condition == "FLT")
+table(seurat_flt$cell_type_cc)
+
+#map sample -> samples column CellChat v2 expects (must be a factor)
+seurat_flt$samples <- factor(seurat_flt$sample)
+Idents(seurat_flt) <- "cell_type_cc"
+
+cellchat_flt <- createCellChat(
+  object   = seurat_flt,
+  group.by = "cell_type_cc",
+  assay    = "RNA"
+)
+
+#MOUSE database - mouse PBMC data
+cellchat_flt@DB <- CellChatDB.mouse
+
+cellchat_flt <- subsetData(cellchat_flt)
+cellchat_flt <- identifyOverExpressedGenes(cellchat_flt, do.fast = FALSE)
+cellchat_flt <- identifyOverExpressedInteractions(cellchat_flt)
+
+cellchat_flt <- computeCommunProb(cellchat_flt, type = "triMean", nboot = 100)
+cellchat_flt <- filterCommunication(cellchat_flt, min.cells = 10)
+cellchat_flt <- computeCommunProbPathway(cellchat_flt)
+cellchat_flt <- aggregateNet(cellchat_flt)
+cellchat_flt <- netAnalysis_computeCentrality(cellchat_flt, slot.name = "netP")
+
+saveRDS(cellchat_flt, file = "cellchat_FLT.rds")
+
+
+#Part 2: GC group - identical pipeline
+seurat_gc <- subset(combined, condition == "GC")
+seurat_gc$samples <- factor(seurat_gc$sample)
+Idents(seurat_gc) <- "cell_type_cc"
+
+cellchat_gc <- createCellChat(
+  object   = seurat_gc,
+  group.by = "cell_type_cc",
+  assay    = "RNA"
+)
+cellchat_gc@DB <- CellChatDB.mouse
+cellchat_gc <- subsetData(cellchat_gc)
+cellchat_gc <- identifyOverExpressedGenes(cellchat_gc, do.fast = FALSE)
+cellchat_gc <- identifyOverExpressedInteractions(cellchat_gc)
+cellchat_gc <- computeCommunProb(cellchat_gc, type = "triMean", nboot = 100)
+cellchat_gc <- filterCommunication(cellchat_gc, min.cells = 10)
+cellchat_gc <- computeCommunProbPathway(cellchat_gc)
+cellchat_gc <- aggregateNet(cellchat_gc)
+cellchat_gc <- netAnalysis_computeCentrality(cellchat_gc, slot.name = "netP")
+
+saveRDS(cellchat_gc, file = "cellchat_GC.rds")
+
+#Part 3: Comparative analysis - FLT vs GC
+cellchat_flt <- readRDS("cellchat_FLT.rds")
+cellchat_gc  <- readRDS("cellchat_GC.rds")
+
+#order determines direction of every differential result below.
+#query (index 2) - reference (index 1) = GC - FLT
+#red = stronger in GC; blue = stronger in FLT
+object.list <- list(
+  FLT = cellchat_flt,
+  GC  = cellchat_gc
+)
+cellchat_merged <- mergeCellChat(object.list, add.names = names(object.list))
+
+#confirm identical cell type labels between the two objects before trusting the merge
+setdiff(levels(cellchat_flt@idents), levels(cellchat_gc@idents))
+setdiff(levels(cellchat_gc@idents), levels(cellchat_flt@idents))
+
+#total interaction number/strength - absolute values, no directionality
+gg1 <- compareInteractions(cellchat_merged, show.legend = FALSE, group = c(1, 2))
+gg2 <- compareInteractions(cellchat_merged, show.legend = FALSE, group = c(1, 2), measure = "weight")
+png("plots/comparison/01_interaction_count_vs_strength.png", width = 1200, height = 750, res = 150)
+print(gg1 + gg2)
+dev.off()
+
+#per-condition circle plots
+for (i in 1:length(object.list)) {
+  fname <- paste0("plots/comparison/02_circle_", tolower(names(object.list)[i]), ".png")
+  png(fname, width = 700, height = 700, res = 150)
+  netVisual_circle(
+    object.list[[i]]@net$count,
+    weight.scale = TRUE, label.edge = FALSE,
+    title.name   = paste("Number of Interactions -", names(object.list)[i])
+  )
+  dev.off()
+}
+
+#differential interaction circle plots (red = more in GC, blue = more in FLT per list order above)
+#FLIGHT TO GROUND CONTROL !!!!!!!!!!!!!!!! red is decrease in FLT compared to GC and blue is increase in FLT compared to GC
+png("plots/comparison/03a_diff_interactions_count.png", width = 700, height = 700, res = 150)
+netVisual_diffInteraction(cellchat_merged, weight.scale = TRUE)
+dev.off()
+
+png("plots/comparison/03b_diff_interactions_strength.png", width = 700, height = 700, res = 150)
+netVisual_diffInteraction(cellchat_merged, weight.scale = TRUE, measure = "weight")
+dev.off()
+
+#differential heatmap - more systematic view across all cell-type pairs
+gg1 <- netVisual_heatmap(cellchat_merged)
+gg2 <- netVisual_heatmap(cellchat_merged, measure = "weight")
+png("plots/comparison/04_differential_heatmaps.png", width = 1800, height = 750, res = 150)
+print(gg1 + gg2)
+dev.off()
+
+#pathway-level comparison 
+png("plots/comparison/05_rankNet_stacked.png", width = 1050, height = 1200, res = 150)
+rankNet(cellchat_merged, mode = "comparison", stacked = TRUE, do.stat = TRUE)
+dev.off()
+
+png("plots/comparison/06_rankNet_sidebyside.png", width = 1050, height = 1200, res = 150)
+rankNet(cellchat_merged, mode = "comparison", stacked = FALSE)
+dev.off()
+
+#outgoing/incoming signaling heatmaps per condition - who changed sending vs receiving
+png("plots/comparison/07_outgoing_heatmap_FLT.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list[[1]], pattern = "outgoing",
+                                  title = "FLT — Outgoing Signaling", height = 12, color.heatmap = "GnBu")
+dev.off()
+
+png("plots/comparison/08_outgoing_heatmap_GC.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list[[2]], pattern = "outgoing",
+                                  title = "GC — Outgoing Signaling", height = 12, color.heatmap = "GnBu")
+dev.off()
+
+png("plots/comparison/09_incoming_heatmap_FLT.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list[[1]], pattern = "incoming",
+                                  title = "FLT — Incoming Signaling", height = 12, color.heatmap = "OrRd")
+dev.off()
+
+png("plots/comparison/10_incoming_heatmap_GC.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list[[2]], pattern = "incoming",
+                                  title = "GC — Incoming Signaling", height = 12, color.heatmap = "OrRd")
+dev.off()
+
+#bubble plot - Macrophages as sender to your validated IFN-elevated populations
+png("plots/comparison/11_bubble_macrophages_to_targets.png", width = 1500, height = 1200, res = 150)
+p <- netVisual_bubble(
+  cellchat_merged,
+  sources.use = c("Macrophages"),
+  targets.use = c("Innate B cells", "Monocytes patrolling", "B cells", "T cells"),
+  comparison  = c(1, 2),
+  angle.x     = 45,
+  remove.isolate = FALSE
+)
+print(p)
+dev.off()
+
+saveRDS(cellchat_merged, file = "cellchat_merged_FLT_GC.rds")
+
+list.files("plots/comparison", full.names = TRUE)
+
+
+#Same as above - for broad cell type 
+dir.create("plots/comparison_broad", recursive = TRUE, showWarnings = FALSE)
+
+#Broad-resolution CellChat: FLT
+seurat_flt_broad <- subset(combined, condition == "FLT")
+seurat_flt_broad$samples <- factor(seurat_flt_broad$sample)
+Idents(seurat_flt_broad) <- "celltype_broad"
+
+cellchat_flt_broad <- createCellChat(object = seurat_flt_broad, group.by = "celltype_broad", assay = "RNA")
+cellchat_flt_broad@DB <- CellChatDB.mouse
+cellchat_flt_broad <- subsetData(cellchat_flt_broad)
+cellchat_flt_broad <- identifyOverExpressedGenes(cellchat_flt_broad, do.fast = FALSE)
+cellchat_flt_broad <- identifyOverExpressedInteractions(cellchat_flt_broad)
+cellchat_flt_broad <- computeCommunProb(cellchat_flt_broad, type = "triMean", nboot = 100)
+cellchat_flt_broad <- filterCommunication(cellchat_flt_broad, min.cells = 10)
+cellchat_flt_broad <- computeCommunProbPathway(cellchat_flt_broad)
+cellchat_flt_broad <- aggregateNet(cellchat_flt_broad)
+cellchat_flt_broad <- netAnalysis_computeCentrality(cellchat_flt_broad, slot.name = "netP")
+saveRDS(cellchat_flt_broad, file = "cellchat_FLT_broad.rds")
+
+#Broad-resolution CellChat: GC
+seurat_gc_broad <- subset(combined, condition == "GC")
+seurat_gc_broad$samples <- factor(seurat_gc_broad$sample)
+Idents(seurat_gc_broad) <- "celltype_broad"
+
+cellchat_gc_broad <- createCellChat(object = seurat_gc_broad, group.by = "celltype_broad", assay = "RNA")
+cellchat_gc_broad@DB <- CellChatDB.mouse
+cellchat_gc_broad <- subsetData(cellchat_gc_broad)
+cellchat_gc_broad <- identifyOverExpressedGenes(cellchat_gc_broad, do.fast = FALSE)
+cellchat_gc_broad <- identifyOverExpressedInteractions(cellchat_gc_broad)
+cellchat_gc_broad <- computeCommunProb(cellchat_gc_broad, type = "triMean", nboot = 100)
+cellchat_gc_broad <- filterCommunication(cellchat_gc_broad, min.cells = 10)
+cellchat_gc_broad <- computeCommunProbPathway(cellchat_gc_broad)
+cellchat_gc_broad <- aggregateNet(cellchat_gc_broad)
+cellchat_gc_broad <- netAnalysis_computeCentrality(cellchat_gc_broad, slot.name = "netP")
+saveRDS(cellchat_gc_broad, file = "cellchat_GC_broad.rds")
+
+
+#Part 3 (broad): Comparative analysis - FLT vs GC
+cellchat_flt_broad <- readRDS("cellchat_FLT_broad.rds")
+cellchat_gc_broad  <- readRDS("cellchat_GC_broad.rds")
+
+object.list_broad <- list(FLT = cellchat_flt_broad, GC = cellchat_gc_broad)
+cellchat_merged_broad <- mergeCellChat(object.list_broad, add.names = names(object.list_broad))
+
+setdiff(levels(cellchat_flt_broad@idents), levels(cellchat_gc_broad@idents))
+setdiff(levels(cellchat_gc_broad@idents), levels(cellchat_flt_broad@idents))
+
+#total interaction number/strength
+gg1 <- compareInteractions(cellchat_merged_broad, show.legend = FALSE, group = c(1, 2))
+gg2 <- compareInteractions(cellchat_merged_broad, show.legend = FALSE, group = c(1, 2), measure = "weight")
+png("plots/comparison_broad/01_interaction_count_vs_strength.png", width = 1200, height = 750, res = 150)
+print(gg1 + gg2)
+dev.off()
+
+#per-condition circle plots
+for (i in 1:length(object.list_broad)) {
+  fname <- paste0("plots/comparison_broad/02_circle_", tolower(names(object.list_broad)[i]), ".png")
+  png(fname, width = 700, height = 700, res = 150)
+  netVisual_circle(
+    object.list_broad[[i]]@net$count,
+    weight.scale = TRUE, label.edge = FALSE,
+    title.name   = paste("Number of Interactions -", names(object.list_broad)[i])
+  )
+  dev.off()
+}
+
+#differential interaction circle plots
+png("plots/comparison_broad/03a_diff_interactions_count.png", width = 700, height = 700, res = 150)
+netVisual_diffInteraction(cellchat_merged_broad, weight.scale = TRUE)
+dev.off()
+
+png("plots/comparison_broad/03b_diff_interactions_strength.png", width = 700, height = 700, res = 150)
+netVisual_diffInteraction(cellchat_merged_broad, weight.scale = TRUE, measure = "weight")
+dev.off()
+
+#differential heatmap
+gg1 <- netVisual_heatmap(cellchat_merged_broad)
+gg2 <- netVisual_heatmap(cellchat_merged_broad, measure = "weight")
+png("plots/comparison_broad/04_differential_heatmaps.png", width = 1800, height = 750, res = 150)
+print(gg1 + gg2)
+dev.off()
+
+#pathway-level comparison
+png("plots/comparison_broad/05_rankNet_stacked.png", width = 1050, height = 1200, res = 150)
+rankNet(cellchat_merged_broad, mode = "comparison", stacked = TRUE, do.stat = TRUE)
+dev.off()
+
+png("plots/comparison_broad/06_rankNet_sidebyside.png", width = 1050, height = 1200, res = 150)
+rankNet(cellchat_merged_broad, mode = "comparison", stacked = FALSE)
+dev.off()
+
+#outgoing/incoming signaling heatmaps per condition
+png("plots/comparison_broad/07_outgoing_heatmap_FLT.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list_broad[[1]], pattern = "outgoing",
+                                  title = "FLT — Outgoing Signaling", height = 12, color.heatmap = "GnBu")
+dev.off()
+
+png("plots/comparison_broad/08_outgoing_heatmap_GC.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list_broad[[2]], pattern = "outgoing",
+                                  title = "GC — Outgoing Signaling", height = 12, color.heatmap = "GnBu")
+dev.off()
+
+png("plots/comparison_broad/09_incoming_heatmap_FLT.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list_broad[[1]], pattern = "incoming",
+                                  title = "FLT — Incoming Signaling", height = 12, color.heatmap = "OrRd")
+dev.off()
+
+png("plots/comparison_broad/10_incoming_heatmap_GC.png", width = 1200, height = 1000, res = 150)
+netAnalysis_signalingRole_heatmap(object.list_broad[[2]], pattern = "incoming",
+                                  title = "GC — Incoming Signaling", height = 12, color.heatmap = "OrRd")
+dev.off()
+
+#bubble plot - Macrophages as sender to broad target categories
+png("plots/comparison_broad/11_bubble_macrophages_to_targets.png", width = 1500, height = 1200, res = 150)
+p_broad <- netVisual_bubble(
+  cellchat_merged_broad,
+  sources.use = c("Macrophages"),
+  targets.use = c("B Cells", "T Cells", "NK Cells", "Neutrophils"),
+  comparison  = c(1, 2),
+  angle.x     = 45,
+  remove.isolate = FALSE
+)
+print(p_broad)
+dev.off()
+
+saveRDS(cellchat_merged_broad, file = "cellchat_merged_FLT_GC_broad.rds")
+list.files("plots/comparison_broad", full.names = TRUE)
+
+# if not installed yet:
+remotes::install_github("mojaveazure/seurat-disk")
+library(SeuratDisk)
+
+SaveH5Seurat(combined, filename = "combined_for_scdrs.h5Seurat")
+Convert("combined_for_scdrs.h5Seurat", dest = "h5ad")
+
+
+Layers(combined[["RNA"]])
+
+library(Matrix)
+
+# export counts matrix, gene names, cell metadata as separate files
+writeMM(GetAssayData(combined, layer = "counts"), "counts.mtx")
+write.csv(rownames(combined), "genes.csv", row.names = FALSE)
+write.csv(combined@meta.data, "metadata.csv", row.names = TRUE)
+
+list.files(pattern = "counts.mtx|genes.csv|metadata.csv")
+
+
+# check to see if poster findings survive sequencing depth correction check 
+mac_ifn <- subset(combined, cell_type == "Macrophages")
+snca_expr <- GetAssayData(mac_ifn, layer = "data")["Snca", ]
+mac_ifn$snca_expr <- snca_expr
+
+summary(glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))
+
+
+cell_types_snca_all8 <- c("B cells", "T cells", "B cells (atypical/memory)", 
+                          "Macrophages", "B cells (naive)", "Innate B cells",
+                          "Monocytes (patrolling)", "NK cells")
+
+snca_contamination_check_all8_depth <- lapply(cell_types_snca_all8, function(ct) {
+  sub_obj <- subset(combined, cell_type == ct)
+  
+  snca_expr <- GetAssayData(sub_obj, layer = "data")["Snca", ]
+  sub_obj$snca_expr <- snca_expr
+  
+  glm_fit <- glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = sub_obj@meta.data)
+  glm_summary <- summary(glm_fit)$coefficients
+  
+  data.frame(
+    cell_type = ct,
+    n_cells = ncol(sub_obj),
+    condition_p_after_adjustment = glm_summary["conditionGC", "Pr(>|t|)"],
+    condition_estimate = glm_summary["conditionGC", "Estimate"]
+  )
+})
+snca_check_all8_depth_df <- bind_rows(snca_contamination_check_all8_depth)
+print(snca_check_all8_depth_df)
+
+
+b_cells_check <- subset(combined, cell_type == "B cells")
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = b_cells_check@meta.data))
+
+innate_b <- subset(combined, cell_type == "Innate B cells")
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = innate_b@meta.data))
+
+
+
+# Macrophages: Snca and IFN with both covariates
+mac_ifn <- subset(combined, cell_type == "Macrophages")
+mac_ifn$snca_expr <- GetAssayData(mac_ifn, layer = "data")["Snca", ]
+summary(glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))$coefficients
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))$coefficients
+
+# Snca across all 8 cell types, side by side with the hb-only result
+snca_hb_only <- bind_rows(lapply(cell_types_snca_all8, function(ct) {
+  s <- subset(combined, cell_type == ct)
+  s$expr <- GetAssayData(s, layer = "data")["Snca", ]
+  fit <- summary(glm(expr ~ condition + percent.hb, data = s@meta.data))$coefficients
+  data.frame(cell_type = ct, p_hb_only = fit["conditionGC", "Pr(>|t|)"],
+             est_hb_only = fit["conditionGC", "Estimate"])
+}))
+snca_both <- bind_rows(lapply(cell_types_snca_all8, function(ct) {
+  s <- subset(combined, cell_type == ct)
+  s$expr <- GetAssayData(s, layer = "data")["Snca", ]
+  fit <- summary(glm(expr ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients
+  data.frame(cell_type = ct, p_hb_depth = fit["conditionGC", "Pr(>|t|)"],
+             est_hb_depth = fit["conditionGC", "Estimate"])
+}))
+left_join(snca_hb_only, snca_both, by = "cell_type")
+
+# IFN in the three populations on the poster/conclusions
+for (ct in c("B cells", "Innate B cells", "T cells", "Monocytes (patrolling)", "B cells (atypical/memory)")) {
+  s <- subset(combined, cell_type == ct)
+  cat("\n", ct, "\n")
+  print(summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients["conditionGC", ])
+}
