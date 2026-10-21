@@ -41,29 +41,29 @@ sample_info <- data.frame(
 seurat_list <- list()
 for (i in seq_len(nrow(sample_info))) {
   cat("Loading", sample_info$sample[i], "\n")
-  
+
   path <- file.path(paste0(sample_info$sample[i], "_GeneFull"),
                     paste0("RRRM2_PBMC_", sample_info$sample[i], "_GeneFull"),
                     "filtered")
-  
+
   counts <- ReadMtx(mtx      = file.path(path, "matrix.mtx"),
                     cells    = file.path(path, "barcodes.tsv"),
                     features = file.path(path, "features.tsv"))
-  
+
   #require gene detection in at least 3 cells and at least 200 genes per cell to filter out low quality cells and unreliable genes
   obj <- CreateSeuratObject(counts       = counts,
                             project      = sample_info$sample[i],
                             min.cells    = 3,
                             min.features = 200)
-  
+
   obj$sample    <- sample_info$sample[i]
   obj$condition <- sample_info$condition[i]
   obj$age       <- sample_info$age[i]
-  
+
   #calculate mitochondrial and ribosomal percentages per cell
   obj[["percent.mt"]]   <- PercentageFeatureSet(obj, pattern = "^mt-")
   obj[["percent.ribo"]] <- PercentageFeatureSet(obj, pattern = "^Rp[sl]")
-  
+
   seurat_list[[sample_info$sample[i]]] <- obj
 }
 
@@ -74,7 +74,7 @@ combined <- merge(seurat_list[[1]],
                   add.cell.ids = sample_info$sample)
 
 
-#filter low quality cells based on QC metrics
+#filter low quality cells based on QC metrics - should have filtered for each sample individually 
 #percent.mt threshold set to 20 instead of 10 bc mouse PBMCs run higher than human (interesting!)
 #25,352 cells retained after filtering
 combined <- subset(combined,
@@ -90,7 +90,17 @@ FeatureScatter(combined,
                feature2 = "nFeature_RNA",
                group.by = "sample")
 
-#Remove hemoglobin 
+#on seurat_list, before merging/filtering, if you still have it, or rerun QC metrics per sample
+combined@meta.data %>%
+  group_by(sample) %>%
+  summarise(
+    median_nFeature = median(nFeature_RNA),
+    median_nCount = median(nCount_RNA),
+    median_pct_mt = median(percent.mt),
+    n = n()
+  )
+
+#Remove hemoglobin
 grep("^Hb[ab]-", rownames(combined), value = TRUE)
 
 is_hb <- grepl("^Hb[ab]-", rownames(combined))
@@ -143,6 +153,7 @@ DimPlot(combined, group.by = "sample")
 DimPlot(combined, group.by = "seurat_clusters", label = TRUE)
 
 
+
 #MARKER GENE DETECTION
 #JoinLayers required before FindAllMarkers in Seurat v5
 combined <- JoinLayers(combined)
@@ -170,7 +181,7 @@ combined$seurat_clusters <- droplevels(combined$seurat_clusters)
 table(combined$seurat_clusters)
 
 
-#SINGLER AUTOMATED ANNOTATION 
+#SINGLER AUTOMATED ANNOTATION
 #download mouse immune reference
 ref    <- celldex::ImmGenData()
 #get normalized counts
@@ -190,6 +201,7 @@ DimPlot(combined, reduction = "umap", group.by = "singler_labels",
 
 #check how many cells were assigned to each label
 table(combined$singler_labels)
+
 
 #view numbered clusters on same UMAP for comparison with SingleR labels
 DimPlot(combined, reduction = "umap", group.by = "seurat_clusters",
@@ -267,7 +279,7 @@ combined$cell_type <- as.character(cell_types[as.character(combined$seurat_clust
 #confirm final cell type count
 length(unique(combined$cell_type))
 
-#ANNOTATED UMAP 
+#ANNOTATED UMAP
 #view final annotated UMAP
 DimPlot(combined, reduction = "umap", group.by = "cell_type",
         label = TRUE, repel = TRUE)
@@ -289,13 +301,13 @@ print(p)
 
 table(combined$seurat_clusters, combined$cell_type)
 
-ncol(combined)  
-table(combined$condition)     
-grep("^Hb[ab]-", rownames(combined), value = TRUE)  
-length(unique(combined$cell_type))  
+ncol(combined)
+table(combined$condition)
+grep("^Hb[ab]-", rownames(combined), value = TRUE)
+length(unique(combined$cell_type))
 
 
-#CANONICAL MARKER DOTPLOT 
+#CANONICAL MARKER DOTPLOT
 #canonical mouse immune marker panel, grouped by lineage
 #check against data first so DotPlot doesn't choke on missing genes
 canonical_markers <- c(
@@ -366,28 +378,28 @@ cell_type_order <- c(
 
 #one representative marker per cell type (roughly), ordered for diagonal expression pattern
 poster_markers <- c(
-  "Itga2b",   # platelets 
-  "Car2",     # proerythroblasts 
+  "Itga2b",   # platelets
+  "Car2",     # proerythroblasts
   "Cd34",     # HSCs/Progenitors
-  "F13a1",    # monocytes 
-  "Ccr2",     # monocytes (inflammatory) 
+  "F13a1",    # monocytes
+  "Ccr2",     # monocytes (inflammatory)
   "Nr4a1",    # monocytes (patrolling)
-  "Ly6g",     # neutrophils 
-  "Elane",    # neutrophils (immature) 
-  "Acod1",    # neutrophils (inflammatory) 
-  "Flt3",   # dendritic cells 
-  "Siglech",  # plasmacytoid DC 
-  "Mertk",    # monocyte-derived macrophages 
-  "Gata6",    # macrophages 
-  "Lef1",     # T cells 
-  "Cd8b1",    # T cells (CD8+) 
-  "Nkg7",     # NK cells 
-  "Sox5",    # B cells 
-  "Il5ra",    # innate B cells 
-  "Zbtb32",   # B cells (atypical/memory) 
+  "Ly6g",     # neutrophils
+  "Elane",    # neutrophils (immature)
+  "Acod1",    # neutrophils (inflammatory)
+  "Flt3",   # dendritic cells
+  "Siglech",  # plasmacytoid DC
+  "Mertk",    # monocyte-derived macrophages
+  "Gata6",    # macrophages
+  "Lef1",     # T cells
+  "Cd8b1",    # T cells (CD8+)
+  "Nkg7",     # NK cells
+  "Sox5",    # B cells
+  "Il5ra",    # innate B cells
+  "Zbtb32",   # B cells (atypical/memory)
   "Vpreb3",   # B cells (progenitor)
-  "Ighd",     # B cells (naive) 
-  "Jchain"    # plasma cells 
+  "Ighd",     # B cells (naive)
+  "Jchain"    # plasma cells
 )
 
 p_dotplot <- DotPlot(combined,
@@ -399,71 +411,49 @@ p_dotplot <- DotPlot(combined,
 
 p_dotplot
 
-#check that the dendritic cell split is supported
 FetchData(combined, vars = c("Zbtb46", "Flt3", "cell_type")) %>%
-  filter(cell_type %in% c("Dendritic cells", "Plasmacytoid DC", "Monocytes", 
+  filter(cell_type %in% c("Dendritic cells", "Plasmacytoid DC", "Monocytes",
                           "Monocytes (inflammatory)", "Macrophages")) %>%
   group_by(cell_type) %>%
   summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
 
-#check neutrophil vs inflammatory neutrophil 
 FetchData(combined, vars = c("Retnlg", "Acod1", "cell_type")) %>%
   filter(cell_type %in% c("Neutrophils", "Neutrophils (inflammatory)")) %>%
   group_by(cell_type) %>%
   summarise(mean_Retnlg = mean(Retnlg), pct_Retnlg = mean(Retnlg > 0),
             mean_Acod1 = mean(Acod1), pct_Acod1 = mean(Acod1 > 0))
 
-#compare all three neutrophil clusters on granule/maturation markers (Mmp8, Mmp9, Ly6g, Ltf) to support the immature vs mature vs inflammatory labels
 FetchData(combined, vars = c("Mmp8", "Mmp9", "Ly6g", "Ltf", "cell_type")) %>%
   filter(cell_type %in% c("Neutrophils", "Neutrophils (immature)", "Neutrophils (inflammatory)")) %>%
   group_by(cell_type) %>%
   summarise(across(everything(), list(mean = mean, pct = ~mean(. > 0))))
-#cells per sample and which condition each sample belongs to
-table(combined$sample, combined$condition)
 
-#B cell subtype markers used for the poster dotplot (Sox5, Ighd, Vpreb3, Zbtb32, Il5ra),
-#to confirm each B subtype is defined by its expected marker
 FetchData(combined, vars = c("Sox5", "Ighd", "Vpreb3", "Zbtb32", "Il5ra", "cell_type")) %>%
-  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)", 
+  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)",
                           "B cells (atypical/memory)", "Innate B cells")) %>%
   group_by(cell_type) %>%
   summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
 
-#which B cell subtypes express the B cell genes (Ebf1, Bank1, Ralgps2, Fchsd2) that came up in the overall FLT vs GC DEGs,
-#to see whether they are concentrated in one subtype
 FetchData(combined, vars = c("Ebf1", "Bank1", "Ralgps2", "Fchsd2", "cell_type")) %>%
-  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)", 
+  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)",
                           "B cells (atypical/memory)", "Innate B cells")) %>%
   group_by(cell_type) %>%
   summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
 
-#Cd4 expression in the two T cell clusters, to check whether "T cells" is CD4+ and distinct from the CD8+ cluster
 FetchData(combined, vars = c("Cd4", "cell_type")) %>%
   filter(cell_type %in% c("T cells", "T cells (CD8+)")) %>%
   group_by(cell_type) %>%
   summarise(mean = mean(Cd4), pct = mean(Cd4 > 0))
 
-#top 15 markers for cluster 0 (B cells)
 markers %>% filter(cluster == "0") %>% arrange(desc(avg_log2FC)) %>% head(15)
 
-#B lineage identity check (Pax5, Btla) across all five B cell subtypes
 FetchData(combined, vars = c("Pax5", "Btla", "cell_type")) %>%
-  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)", 
+  filter(cell_type %in% c("B cells", "B cells (naive)", "B cells (progenitor)",
                           "B cells (atypical/memory)", "Innate B cells")) %>%
   group_by(cell_type) %>%
   summarise(across(where(is.numeric), list(mean = mean, pct = ~mean(. > 0))))
 
-#on seurat_list, before merging/filtering, if you still have it, or rerun QC metrics per sample
-combined@meta.data %>%
-  group_by(sample) %>%
-  summarise(
-    median_nFeature = median(nFeature_RNA),
-    median_nCount = median(nCount_RNA),
-    median_pct_mt = median(percent.mt),
-    n = n()
-  )
-
-#QC AND DOUBLET CHECKS 
+#QC AND DOUBLET CHECKS
 #basic QC metrics per cell type -- doublets often run higher on both
 VlnPlot(combined, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"),
         group.by = "cell_type", pt.size = 0)
@@ -473,7 +463,7 @@ VlnPlot(combined, features = c("nCount_RNA", "nFeature_RNA", "percent.mt"),
 mac_cells <- subset(combined, cell_type == "Monocyte-derived Macrophages")
 VlnPlot(mac_cells, features = c("Adgre1", "Pf4", "Itga2b", "Ppbp"), pt.size = 0)
 
-#doublet check across final annotation 
+#doublet check across final annotation
 combined <- JoinLayers(combined)
 sce <- as.SingleCellExperiment(combined)
 sce <- scDblFinder(sce, samples = "sample")
@@ -481,7 +471,7 @@ combined$scDblFinder_class <- sce$scDblFinder.class
 
 table(combined$cell_type, combined$scDblFinder_class)
 
-#CELL COMPOSITION ANALYSIS 
+#CELL COMPOSITION ANALYSIS
 #check cluster sizes
 table(combined$seurat_clusters)
 #check overall cell counts per condition
@@ -602,7 +592,7 @@ DimPlot(combined,
         split.by = "condition",
         pt.size = 0.3)
 
-#MITOCARTA MODULE SCORING 
+#MITOCARTA MODULE SCORING
 mitocarta <- read_excel("/Users/lexigover/Downloads/Mouse.MitoCarta3.0.xls",
                         sheet = "A Mouse MitoCarta3.0")
 mito_genes <- mitocarta$Symbol
@@ -703,7 +693,7 @@ VlnPlot(mac_ifn, features = "Snca", group.by = "condition",
         axis.text.x = element_text(size = 16), axis.text.y = element_text(size = 14),
         axis.title.y = element_text(size = 16), plot.title = element_text(size = 18, face = "bold"))
 
-#CELL-LEVEL DEG ANALYSIS 
+#CELL-LEVEL DEG ANALYSIS
 #overall DEG analysis: all FLT vs all GC cells regardless of cell type
 Idents(combined) <- "condition"
 all_degs <- FindMarkers(combined, ident.1 = "FLT", ident.2 = "GC",
@@ -755,11 +745,11 @@ for (ct in cell_types_to_test) {
         TRUE ~ "NS"
       ))
     deg_results[[ct]] <- degs
-    
+
     top10_up   <- degs %>% filter(direction == "Up in FLT") %>% arrange(desc(avg_log2FC)) %>% head(10)
     top10_down <- degs %>% filter(direction == "Up in GC") %>% arrange(avg_log2FC) %>% head(10)
     top10_ct <- bind_rows(top10_up, top10_down)
-    
+
     p <- ggplot(degs, aes(x = avg_log2FC, y = -log10(p_val_adj), color = direction)) +
       geom_point(alpha = 0.5, size = 1) +
       geom_text_repel(data = top10_ct, aes(label = gene), size = 3, max.overlaps = 20) +
@@ -770,7 +760,7 @@ for (ct in cell_types_to_test) {
       geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
       geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50")
     print(p)
-    
+
   }, error = function(e) {
     cat("Skipping", ct, "- insufficient cells\n")
   })
@@ -798,7 +788,7 @@ deg_summary %>%
        x = NULL, y = "Number of significant DEGs", fill = NULL)
 
 
-#PSEUDOBULK DESeq2 
+#PSEUDOBULK DESeq2
 pseudo_bulk <- AggregateExpression(
   object        = combined,
   group.by      = c("cell_type", "orig.ident", "condition"),
@@ -811,20 +801,20 @@ for (ct in cell_types_to_test) {
   cat("\nDESeq2:", ct, "\n")
   ct_escaped <- gsub("([\\+\\(\\)])", "\\\\\\1", ct)
   ct_cols    <- colnames(cts)[grep(paste0("^", ct_escaped, "[-_]"), colnames(cts))]
-  
+
   if (length(ct_cols) < 6) {
     cat("skipping", ct, "- fewer than 6 pseudobulk samples\n"); next
   }
-  
+
   cluster_counts <- cts[, ct_cols]
   conditions     <- sapply(strsplit(colnames(cluster_counts), "[-_]"), function(x) tail(x, 1))
   meta           <- data.frame(row.names = colnames(cluster_counts),
                                condition = factor(conditions, levels = c("GC", "FLT")))
-  
+
   if (length(unique(meta$condition)) < 2) {
     cat("skipping", ct, "- only one condition present\n"); next
   }
-  
+
   tryCatch({
     dds  <- DESeqDataSetFromMatrix(countData = cluster_counts, colData = meta, design = ~ condition)
     #gene filter tightened for small n (4 vs 4): counts >=10 in at least 4 samples
@@ -833,7 +823,7 @@ for (ct in cell_types_to_test) {
     dds  <- dds[keep, ]
     dds  <- DESeq(dds, quiet = TRUE)
     res  <- results(dds, contrast = c("condition", "FLT", "GC"))
-    
+
     degs <- as.data.frame(res) %>%
       rownames_to_column("gene") %>%
       rename(p_val_adj = padj, avg_log2FC = log2FoldChange, p_val = pvalue) %>%
@@ -845,11 +835,11 @@ for (ct in cell_types_to_test) {
         TRUE ~ "NS"
       ))
     deg_results_deseq2[[ct]] <- degs
-    
+
     top10_up   <- degs %>% filter(direction == "Up in FLT") %>% arrange(p_val_adj) %>% head(10)
     top10_down <- degs %>% filter(direction == "Up in GC")  %>% arrange(p_val_adj) %>% head(10)
     top10_ct   <- bind_rows(top10_up, top10_down)
-    
+
     p <- ggplot(degs, aes(x = avg_log2FC, y = -log10(p_val_adj), color = direction)) +
       geom_point(alpha = 0.5, size = 1) +
       geom_text_repel(data = top10_ct, aes(label = gene), size = 3, max.overlaps = 20) +
@@ -860,7 +850,7 @@ for (ct in cell_types_to_test) {
       geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
       geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50")
     print(p)
-    
+
   }, error = function(e) { cat("error for", ct, ":", e$message, "\n") })
 }
 all_deseq2_degs <- bind_rows(deg_results_deseq2)
@@ -881,21 +871,21 @@ for (ct in cell_types_to_test) {
   cat("\nlimma:", ct, "\n")
   ct_escaped <- gsub("([\\+\\(\\)])", "\\\\\\1", ct)
   ct_cols    <- colnames(cts)[grep(paste0("^", ct_escaped, "[-_]"), colnames(cts))]
-  
+
   if (length(ct_cols) < 6) {
     cat("skipping", ct, "- fewer than 6 pseudobulk samples\n"); next
   }
-  
+
   cluster_counts <- cts[, ct_cols]
   conditions     <- factor(
     sapply(strsplit(colnames(cluster_counts), "[-_]"), function(x) tail(x, 1)),
     levels = c("GC", "FLT")
   )
-  
+
   if (length(unique(conditions)) < 2) {
     cat("skipping", ct, "- only one condition present\n"); next
   }
-  
+
   tryCatch({
     #gene filter aligned with DESeq2 above: counts >=10 in at least 4 samples
     keep           <- rowSums(cluster_counts >= 10) >= 4
@@ -904,7 +894,7 @@ for (ct in cell_types_to_test) {
     v      <- voom(cluster_counts, design, plot = FALSE)
     fit    <- lmFit(v, design)
     fit    <- eBayes(fit)
-    
+
     res <- topTable(fit, coef = 2, number = Inf, sort.by = "P") %>%
       rownames_to_column("gene") %>%
       mutate(cell_type = ct,
@@ -914,11 +904,11 @@ for (ct in cell_types_to_test) {
                TRUE ~ "NS"
              ))
     deg_results_limma[[ct]] <- res
-    
+
     top10_up   <- res %>% filter(direction == "Up in FLT") %>% arrange(adj.P.Val) %>% head(10)
     top10_down <- res %>% filter(direction == "Up in GC")  %>% arrange(adj.P.Val) %>% head(10)
     top10_ct   <- bind_rows(top10_up, top10_down)
-    
+
     p <- ggplot(res, aes(x = logFC, y = -log10(adj.P.Val), color = direction)) +
       geom_point(alpha = 0.5, size = 1) +
       geom_text_repel(data = top10_ct, aes(label = gene), size = 3, max.overlaps = 20) +
@@ -929,7 +919,7 @@ for (ct in cell_types_to_test) {
       geom_vline(xintercept = c(-0.25, 0.25), linetype = "dashed", color = "grey50") +
       geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "grey50")
     print(p)
-    
+
   }, error = function(e) { cat("error for", ct, ":", e$message, "\n") })
 }
 all_limma_degs <- bind_rows(deg_results_limma)
@@ -940,7 +930,7 @@ deg_summary_limma <- all_limma_degs %>%
   arrange(cell_type)
 print(deg_summary_limma, n = 50)
 
-#compare DESeq2 and limma hits 
+#compare DESeq2 and limma hits
 deseq2_sig <- all_deseq2_degs %>%
   filter(p_val_adj < 0.05) %>%
   dplyr::select(gene, cell_type, avg_log2FC, p_val_adj, direction)
@@ -956,9 +946,6 @@ cat("\nlimma significant genes:\n");  print(limma_sig)
 #(see earlier cell-level "Overall DEGs" discussion)
 deseq2_sig %>% filter(gene %in% c("Ebf1", "Pax5", "Bank1", "Aff3", "Ikzf3", "Bach2", "Foxp1"))
 limma_sig %>% filter(gene %in% c("Ebf1", "Pax5", "Bank1", "Aff3", "Ikzf3", "Bach2", "Foxp1"))
-
-#save a checkpoint
-saveRDS(combined, "combined_final_with_degs.rds")
 
 #check hemoglobin-expressing cell impact
 #reload raw matrices (same as original loading step)
@@ -1027,22 +1014,22 @@ summary(glm(snca_expr ~ condition + percent.hb, data = mac_ifn@meta.data))
 summary(glm(IFN_score1 ~ condition + percent.hb, data = mac_ifn@meta.data))
 
 #repeat across all cell types where Snca was significant in the pooled/per-celltype DEG results
-cell_types_snca_all8 <- c("B cells", "T cells", "B cells (atypical/memory)", 
+cell_types_snca_all8 <- c("B cells", "T cells", "B cells (atypical/memory)",
                           "Macrophages", "B cells (naive)", "Innate B cells",
                           "Monocytes (patrolling)", "NK cells")
 snca_contamination_check_all8 <- lapply(cell_types_snca_all8, function(ct) {
   sub_obj <- subset(combined, cell_type == ct)
-  
+
   hb_test <- wilcox.test(percent.hb ~ condition, data = sub_obj@meta.data)
-  
+
   snca_expr <- GetAssayData(sub_obj, layer = "data")["Snca", ]
   sub_obj$snca_expr <- snca_expr
-  
+
   cor_test <- cor.test(snca_expr, sub_obj$percent.hb, method = "spearman")
-  
+
   glm_fit <- glm(snca_expr ~ condition + percent.hb, data = sub_obj@meta.data)
   glm_summary <- summary(glm_fit)$coefficients
-  
+
   data.frame(
     cell_type = ct,
     n_cells = ncol(sub_obj),
@@ -1059,13 +1046,13 @@ print(snca_check_all8_df)
 nrow(deg_results[["Macrophages"]] %>% filter(p_val_adj < 0.05))
 
 #compare to other cell types to see if Macrophages is really the strongest
-deg_summary %>% 
-  group_by(cell_type) %>% 
-  summarise(total_degs = sum(n_degs)) %>% 
+deg_summary %>%
+  group_by(cell_type) %>%
+  summarise(total_degs = sum(n_degs)) %>%
   arrange(desc(total_degs))
 
 #Are interferon-stimulated genes actually enriched among Macrophage DEGs?
-mac_degs_up <- deg_results[["Macrophages"]] %>% 
+mac_degs_up <- deg_results[["Macrophages"]] %>%
   filter(p_val_adj < 0.05, avg_log2FC > 0.25) %>%
   pull(gene)
 
@@ -1074,15 +1061,12 @@ sum(mac_degs_up %in% ifn_genes)
 length(mac_degs_up)
 mac_degs_up[mac_degs_up %in% ifn_genes]  # actually list which ones
 
-#does the IFN module score itself support this claim?
-score_test %>% filter(cell_type == "Macrophages")
-
 #repeated below with a fixed seed for a reproducible final value
 wilcox.test(IFN_score1 ~ condition, data = mac_ifn@meta.data)
 
 grep("^Hb[ab]-", rownames(mac_ifn), value = TRUE)  #should be empty if corrected object
 "Erythrocytes" %in% unique(combined$cell_type)      #should be FALSE
-nrow(mac_ifn)                                       
+nrow(mac_ifn)
 
 #recompute IFN score with fixed seed for a clean test
 set.seed(42)
@@ -1102,6 +1086,9 @@ ifn_score_test <- combined@meta.data %>%
   mutate(p_adj = p.adjust(p_value, method = "BH")) %>%
   arrange(p_adj)
 print(ifn_score_test, n = 22)
+
+#does the IFN module score itself support this claim?
+ifn_score_test %>% filter(cell_type == "Macrophages")
 
 b_cells_check <- subset(combined, cell_type == "B cells")
 
@@ -1131,7 +1118,7 @@ innate_b@meta.data %>%
   group_by(condition) %>%
   summarise(mean_ifn = mean(IFN_score1))
 
-#confirm it survives the contamination check 
+#confirm it survives the contamination check
 summary(glm(IFN_score1 ~ condition + percent.hb, data = innate_b@meta.data))
 
 #final poster-ready plots
@@ -1162,6 +1149,134 @@ VlnPlot(mac_cells_final,
         axis.title.y     = element_text(size = 16),
         plot.title       = element_text(size = 18, face = "bold"))
 
+#Do the top 5 upregulated and downregulated genes survive contamination?
+up_genes <- c("Gpx1", "Ubb", "Prdx2", "Snca", "Slc25a37") 
+gene_hb <- bind_rows(lapply(up_genes, function(g) {
+  bind_rows(lapply(cell_types_snca_all8, function(ct) {
+    s <- subset(combined, cell_type == ct)
+    s$expr <- GetAssayData(s, layer = "data")[g, ]
+    fit <- summary(glm(expr ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients
+    data.frame(gene = g, cell_type = ct,
+               estimate = fit["conditionGC", "Estimate"], p = fit["conditionGC", "Pr(>|t|)"])
+  }))
+}))
+gene_hb$p_adj <- p.adjust(gene_hb$p, method = "BH")
+gene_hb %>% arrange(gene, p_adj)
+
+down_genes <- c("Ebf1", "Bach2", "Foxp1", "Bank1", "Aff3")
+down_hb <- bind_rows(lapply(down_genes, function(g) {
+  bind_rows(lapply(cell_types_snca_all8, function(ct) {
+    s <- subset(combined, cell_type == ct)
+    s$expr <- GetAssayData(s, layer = "data")[g, ]
+    fit <- summary(glm(expr ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients
+    data.frame(gene = g, cell_type = ct,
+               estimate = fit["conditionGC", "Estimate"], p = fit["conditionGC", "Pr(>|t|)"])
+  }))
+}))
+down_hb$p_adj <- p.adjust(down_hb$p, method = "BH")
+down_hb %>% arrange(gene, p_adj)
+
+
+#save a checkpoint
+saveRDS(combined, "combined_final_with_degs.rds")
+
+
+#check to see if poster findings survive sequencing depth correction check
+mac_ifn <- subset(combined, cell_type == "Macrophages")
+snca_expr <- GetAssayData(mac_ifn, layer = "data")["Snca", ]
+mac_ifn$snca_expr <- snca_expr
+
+summary(glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))
+
+
+cell_types_snca_all8 <- c("B cells", "T cells", "B cells (atypical/memory)",
+                          "Macrophages", "B cells (naive)", "Innate B cells",
+                          "Monocytes (patrolling)", "NK cells")
+
+snca_contamination_check_all8_depth <- lapply(cell_types_snca_all8, function(ct) {
+  sub_obj <- subset(combined, cell_type == ct)
+
+  snca_expr <- GetAssayData(sub_obj, layer = "data")["Snca", ]
+  sub_obj$snca_expr <- snca_expr
+
+  glm_fit <- glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = sub_obj@meta.data)
+  glm_summary <- summary(glm_fit)$coefficients
+
+  data.frame(
+    cell_type = ct,
+    n_cells = ncol(sub_obj),
+    condition_p_after_adjustment = glm_summary["conditionGC", "Pr(>|t|)"],
+    condition_estimate = glm_summary["conditionGC", "Estimate"]
+  )
+})
+snca_check_all8_depth_df <- bind_rows(snca_contamination_check_all8_depth)
+print(snca_check_all8_depth_df)
+
+
+b_cells_check <- subset(combined, cell_type == "B cells")
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = b_cells_check@meta.data))
+
+innate_b <- subset(combined, cell_type == "Innate B cells")
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = innate_b@meta.data))
+
+
+
+
+#repeats the Snca and IFN contamination tests using only cells with little hemoglobin contamination
+low_hb <- subset(combined, percent.hb < 2)
+ncol(low_hb)
+table(low_hb$sample, low_hb$condition)
+
+snca_low <- bind_rows(lapply(cell_types_snca_all8, function(ct) {
+  s <- subset(low_hb, cell_type == ct)
+  s$expr <- GetAssayData(s, layer = "data")["Snca", ]
+  fit <- summary(glm(expr ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients
+  data.frame(cell_type = ct, n_FLT = sum(s$condition == "FLT"), n_GC = sum(s$condition == "GC"),
+             estimate = fit["conditionGC", "Estimate"], p = fit["conditionGC", "Pr(>|t|)"])
+}))
+snca_low$p_adj <- p.adjust(snca_low$p, method = "BH")
+snca_low
+
+ifn_low <- bind_rows(lapply(c("B cells", "Innate B cells", "T cells", "Monocytes (patrolling)", "B cells (atypical/memory)"), function(ct) {
+  s <- subset(low_hb, cell_type == ct)
+  fit <- summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients
+  data.frame(cell_type = ct, n_FLT = sum(s$condition == "FLT"), n_GC = sum(s$condition == "GC"),
+             estimate = fit["conditionGC", "Estimate"], p = fit["conditionGC", "Pr(>|t|)"])
+}))
+ifn_low
+
+#re-test Snca and the IFN score for a FLT vs GC difference after adjusting for both Hb contamination (percent.hb) and depth (nCount_RNA)
+#Macrophages: Snca and IFN with both covariates
+mac_ifn <- subset(combined, cell_type == "Macrophages")
+mac_ifn$snca_expr <- GetAssayData(mac_ifn, layer = "data")["Snca", ]
+summary(glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))$coefficients
+summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))$coefficients
+
+#Snca across all 8 cell types, side by side with the hb-only result
+snca_hb_only <- bind_rows(lapply(cell_types_snca_all8, function(ct) {
+  s <- subset(combined, cell_type == ct)
+  s$expr <- GetAssayData(s, layer = "data")["Snca", ]
+  fit <- summary(glm(expr ~ condition + percent.hb, data = s@meta.data))$coefficients
+  data.frame(cell_type = ct, p_hb_only = fit["conditionGC", "Pr(>|t|)"],
+             est_hb_only = fit["conditionGC", "Estimate"])
+}))
+snca_both <- bind_rows(lapply(cell_types_snca_all8, function(ct) {
+  s <- subset(combined, cell_type == ct)
+  s$expr <- GetAssayData(s, layer = "data")["Snca", ]
+  fit <- summary(glm(expr ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients
+  data.frame(cell_type = ct, p_hb_depth = fit["conditionGC", "Pr(>|t|)"],
+             est_hb_depth = fit["conditionGC", "Estimate"])
+}))
+left_join(snca_hb_only, snca_both, by = "cell_type")
+
+#IFN in the three populations on the poster/conclusions
+for (ct in c("B cells", "Innate B cells", "T cells", "Monocytes (patrolling)", "B cells (atypical/memory)")) {
+  s <- subset(combined, cell_type == ct)
+  cat("\n", ct, "\n")
+  print(summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients["conditionGC", ])
+}
+
 
 #CellChat setup and dependencies
 #if (!requireNamespace("BiocManager", quietly = TRUE))
@@ -1180,7 +1295,6 @@ library(patchwork)
 library(NMF)
 library(foreach)
 library(ggalluvial)
-library(plyr)
 
 options(stringsAsFactors = FALSE)
 registerDoSEQ()  #force sequential NMF - avoids parallel worker errors
@@ -1199,7 +1313,7 @@ unique(combined$cell_type_cc)
 
 combined$celltype_fine <- combined$cell_type_cc
 
-combined$celltype_broad <- mapvalues(combined$celltype_fine,
+combined$celltype_broad <- plyr::mapvalues(combined$celltype_fine,
                                      from = c("B cells", "B cells atypical/memory", "B cells naive", "B cells progenitor",
                                               "Innate B cells", "Plasma cells",
                                               "Dendritic cells", "Plasmacytoid DC",
@@ -1344,7 +1458,7 @@ png("plots/comparison/04_differential_heatmaps.png", width = 1800, height = 750,
 print(gg1 + gg2)
 dev.off()
 
-#pathway-level comparison 
+#pathway-level comparison
 png("plots/comparison/05_rankNet_stacked.png", width = 1050, height = 1200, res = 150)
 rankNet(cellchat_merged, mode = "comparison", stacked = TRUE, do.stat = TRUE)
 dev.off()
@@ -1392,7 +1506,7 @@ saveRDS(cellchat_merged, file = "cellchat_merged_FLT_GC.rds")
 list.files("plots/comparison", full.names = TRUE)
 
 
-#Same as above - for broad cell type 
+#Same as above - for broad cell type
 dir.create("plots/comparison_broad", recursive = TRUE, showWarnings = FALSE)
 
 #Broad-resolution CellChat: FLT
@@ -1521,93 +1635,13 @@ dev.off()
 saveRDS(cellchat_merged_broad, file = "cellchat_merged_FLT_GC_broad.rds")
 list.files("plots/comparison_broad", full.names = TRUE)
 
-# if not installed yet:
-remotes::install_github("mojaveazure/seurat-disk")
-library(SeuratDisk)
-
-SaveH5Seurat(combined, filename = "combined_for_scdrs.h5Seurat")
-Convert("combined_for_scdrs.h5Seurat", dest = "h5ad")
-
-
 Layers(combined[["RNA"]])
 
 library(Matrix)
 
-# export counts matrix, gene names, cell metadata as separate files
+#export counts matrix, gene names, cell metadata as separate files
 writeMM(GetAssayData(combined, layer = "counts"), "counts.mtx")
 write.csv(rownames(combined), "genes.csv", row.names = FALSE)
 write.csv(combined@meta.data, "metadata.csv", row.names = TRUE)
 
 list.files(pattern = "counts.mtx|genes.csv|metadata.csv")
-
-
-# check to see if poster findings survive sequencing depth correction check 
-mac_ifn <- subset(combined, cell_type == "Macrophages")
-snca_expr <- GetAssayData(mac_ifn, layer = "data")["Snca", ]
-mac_ifn$snca_expr <- snca_expr
-
-summary(glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))
-summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))
-
-
-cell_types_snca_all8 <- c("B cells", "T cells", "B cells (atypical/memory)", 
-                          "Macrophages", "B cells (naive)", "Innate B cells",
-                          "Monocytes (patrolling)", "NK cells")
-
-snca_contamination_check_all8_depth <- lapply(cell_types_snca_all8, function(ct) {
-  sub_obj <- subset(combined, cell_type == ct)
-  
-  snca_expr <- GetAssayData(sub_obj, layer = "data")["Snca", ]
-  sub_obj$snca_expr <- snca_expr
-  
-  glm_fit <- glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = sub_obj@meta.data)
-  glm_summary <- summary(glm_fit)$coefficients
-  
-  data.frame(
-    cell_type = ct,
-    n_cells = ncol(sub_obj),
-    condition_p_after_adjustment = glm_summary["conditionGC", "Pr(>|t|)"],
-    condition_estimate = glm_summary["conditionGC", "Estimate"]
-  )
-})
-snca_check_all8_depth_df <- bind_rows(snca_contamination_check_all8_depth)
-print(snca_check_all8_depth_df)
-
-
-b_cells_check <- subset(combined, cell_type == "B cells")
-summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = b_cells_check@meta.data))
-
-innate_b <- subset(combined, cell_type == "Innate B cells")
-summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = innate_b@meta.data))
-
-
-
-# Macrophages: Snca and IFN with both covariates
-mac_ifn <- subset(combined, cell_type == "Macrophages")
-mac_ifn$snca_expr <- GetAssayData(mac_ifn, layer = "data")["Snca", ]
-summary(glm(snca_expr ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))$coefficients
-summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = mac_ifn@meta.data))$coefficients
-
-# Snca across all 8 cell types, side by side with the hb-only result
-snca_hb_only <- bind_rows(lapply(cell_types_snca_all8, function(ct) {
-  s <- subset(combined, cell_type == ct)
-  s$expr <- GetAssayData(s, layer = "data")["Snca", ]
-  fit <- summary(glm(expr ~ condition + percent.hb, data = s@meta.data))$coefficients
-  data.frame(cell_type = ct, p_hb_only = fit["conditionGC", "Pr(>|t|)"],
-             est_hb_only = fit["conditionGC", "Estimate"])
-}))
-snca_both <- bind_rows(lapply(cell_types_snca_all8, function(ct) {
-  s <- subset(combined, cell_type == ct)
-  s$expr <- GetAssayData(s, layer = "data")["Snca", ]
-  fit <- summary(glm(expr ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients
-  data.frame(cell_type = ct, p_hb_depth = fit["conditionGC", "Pr(>|t|)"],
-             est_hb_depth = fit["conditionGC", "Estimate"])
-}))
-left_join(snca_hb_only, snca_both, by = "cell_type")
-
-# IFN in the three populations on the poster/conclusions
-for (ct in c("B cells", "Innate B cells", "T cells", "Monocytes (patrolling)", "B cells (atypical/memory)")) {
-  s <- subset(combined, cell_type == ct)
-  cat("\n", ct, "\n")
-  print(summary(glm(IFN_score1 ~ condition + percent.hb + nCount_RNA, data = s@meta.data))$coefficients["conditionGC", ])
-}
